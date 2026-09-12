@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Prevent iOS rubber-band scroll on the body */
+html, body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Smooth range input thumb on all browsers */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
