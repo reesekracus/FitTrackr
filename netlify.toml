@@ -6,14 +6,7 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# SPA fallback — all routes serve index.html
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
-  status = 200
-
-# Proxy /api/anthropic → Netlify function
-[[redirects]]
-  from   = "/.netlify/functions/anthropic"
-  to     = "/.netlify/functions/anthropic"
   status = 200
