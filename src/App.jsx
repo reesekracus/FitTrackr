@@ -102,22 +102,37 @@ const calcExerciseCals = (met, weightKg, minutes) =>
 // DATE HELPERS
 // ─────────────────────────────────────────────
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// Local date helpers — deliberately avoid toISOString() which returns UTC,
+// causing entries logged in the evening to appear on the wrong date for
+// users in US timezones (UTC-4 to UTC-8).
+const localDateStr = (d = new Date()) => {
+  const y   = d.getFullYear();
+  const m   = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 
-const shiftDate = (d, n) => {
-  const dt = new Date(d + "T12:00:00");
+const todayStr = () => localDateStr();
+
+const shiftDate = (dateStr, n) => {
+  // Parse as local date components to avoid any UTC shift
+  const [y, m, day] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, day);  // local midnight
   dt.setDate(dt.getDate() + n);
-  return dt.toISOString().slice(0, 10);
+  return localDateStr(dt);
 };
 
-const fmtDate = (d) => {
-  if (d === todayStr()) return "Today";
-  if (d === shiftDate(todayStr(), -1)) return "Yesterday";
-  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+const fmtDate = (dateStr) => {
+  if (dateStr === todayStr()) return "Today";
+  if (dateStr === shiftDate(todayStr(), -1)) return "Yesterday";
+  const [y, m, day] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 };
 
-const fmtShort = (d) =>
-  new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const fmtShort = (dateStr) => {
+  const [y, m, day] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
 
 // ─────────────────────────────────────────────
 // STORAGE  (dual-write: localStorage → window.storage fallback)
@@ -200,7 +215,7 @@ const searchFoods = async (query) => {
   const results = [];
   await Promise.allSettled([
     // USDA FoodData Central (rate-limited at 50/day on DEMO_KEY)
-    fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&api_key=DEMO_KEY&pageSize=10`)
+    fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&api_key=${import.meta.env.VITE_USDA_KEY || "DEMO_KEY"}&pageSize=10`)
       .then(r => r.ok ? r.json() : Promise.reject("usda-err"))
       .then(d => { if (d.foods?.length) results.push(...d.foods.slice(0, 6).map(parseUSDA)); })
       .catch(() => {}),
@@ -561,33 +576,137 @@ const scanMealPhoto = async (file) => {
 };
 
 // ─────────────────────────────────────────────
-// MODAL: Food Search
+// MODAL: AI Meal Scan Screen
+// Purple-themed, mirrors the barcode scanner UX
 // ─────────────────────────────────────────────
 
-const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
-  const [query,       setQuery]       = useState("");
-  const [apiResults,  setApiResults]  = useState([]);
-  const [loading,     setLoading]     = useState(false);
-  const [selected,    setSelected]    = useState(null);
-  const [servings,    setServings]    = useState(1);
-  const [showScanner, setShowScanner] = useState(false);
-  const [scanStatus,  setScanStatus]  = useState("");
-  const [scanning,    setScanning]    = useState(false); // AI meal scan in progress
-  const mealScanRef = useRef(null);
-  const timer = useRef(null);
+const MealScanModal = ({ onFound, onClose }) => {
+  const INPUT_ID = "nt-meal-scan-capture";
+  const fileRef  = useRef(null);
+  const [status, setStatus] = useState("idle"); // idle | scanning | notfound
 
-  const handleMealScanFile = async (e) => {
+  const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (mealScanRef.current) mealScanRef.current.value = "";
-    setScanning(true);
+    if (fileRef.current) fileRef.current.value = "";
+    setStatus("scanning");
     const foods = await scanMealPhoto(file);
-    setScanning(false);
     if (foods.length > 0) {
-      setApiResults(prev => [...foods, ...prev]);
-      setQuery(""); // clear query to show scan results at top
+      onFound(foods);
+    } else {
+      setStatus("notfound");
     }
   };
+
+  const MealCameraLabel = ({ children, className, resetStatus }) => (
+    <label
+      htmlFor={INPUT_ID}
+      onClick={() => { if (resetStatus) setStatus("idle"); }}
+      className={`cursor-pointer select-none ${className}`}>
+      {children}
+    </label>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-gray-950 z-[60] flex flex-col">
+      {/* Hidden file input */}
+      <input
+        id={INPUT_ID}
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFile}
+        className="hidden"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-4 text-white">
+        <button onClick={onClose} className="p-1.5"><X size={22} /></button>
+        <span className="font-bold text-base">Scan Your Plate</span>
+        <div className="w-9" />
+      </div>
+
+      {/* Main area */}
+      <div className="flex-1 flex flex-col items-center justify-center px-8 gap-6">
+
+        {status === "idle" && (
+          <>
+            <MealCameraLabel className="w-28 h-28 bg-purple-500/15 rounded-3xl flex items-center justify-center active:bg-purple-500/25 transition-colors">
+              <Utensils size={52} className="text-purple-400" />
+            </MealCameraLabel>
+            <div className="text-center">
+              <h2 className="text-xl font-extrabold text-white mb-2">Scan Your Plate</h2>
+              <p className="text-white/50 text-sm leading-relaxed">
+                Take a photo of your plate. AI will identify each food item and estimate the calories.
+              </p>
+            </div>
+            <MealCameraLabel className="bg-purple-500 active:bg-purple-600 text-white font-bold px-10 py-4 rounded-2xl text-base shadow-lg shadow-purple-900/40 transition-colors">
+              Open Camera
+            </MealCameraLabel>
+          </>
+        )}
+
+        {status === "scanning" && (
+          <>
+            <div className="w-14 h-14 border-[3px] border-purple-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-white/70 text-sm">AI is analyzing your plate…</p>
+          </>
+        )}
+
+        {status === "notfound" && (
+          <div className="text-center">
+            <div className="w-16 h-16 bg-yellow-500/15 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Search size={30} className="text-yellow-400" />
+            </div>
+            <p className="text-yellow-400 font-bold mb-1">No food detected</p>
+            <p className="text-white/50 text-sm mb-5 leading-relaxed">
+              Try a clearer photo with better lighting and distinct food items visible.
+            </p>
+            <MealCameraLabel resetStatus className="inline-block bg-white/10 active:bg-white/25 text-white font-semibold px-6 py-3 rounded-xl transition-colors">
+              Try Again
+            </MealCameraLabel>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
+  const [query,         setQuery]         = useState("");
+  const [apiResults,    setApiResults]    = useState([]);
+  const [loading,       setLoading]       = useState(false);
+  const [selected,      setSelected]      = useState(null);
+  const [servings,      setServings]      = useState(1);
+  const [showScanner,   setShowScanner]   = useState(false);
+  const [showMealScan,  setShowMealScan]  = useState(false);
+  const [scanStatus,    setScanStatus]    = useState("");
+  const [scanning,      setScanning]      = useState(false);
+  const [source,        setSource]        = useState("usda"); // usda | off | ai
+  const timer = useRef(null);
+
+  const SOURCES = [
+    { id: "usda", label: "USDA",             color: "#10B981" },
+    { id: "off",  label: "Open Food Facts",  color: "#3B82F6" },
+    { id: "ai",   label: "AI Lookup",        color: "#A855F7" },
+  ];
+
+  const handleMealScanFound = (foods) => {
+    setShowMealScan(false);
+    setApiResults(prev => [...foods, ...prev]);
+    setQuery("");
+  };
+
+  // Re-run search when source changes (if there's an active query)
+  useEffect(() => {
+    if (query.trim()) {
+      setLoading(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => search(query, source), 150);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
 
   // ── Instant local matches from recently used foods ────────────
   const localMatches = useMemo(() => {
@@ -607,21 +726,33 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
     return [...localMatches, ...apiResults.filter(f => !seen.has(f.id))];
   }, [localMatches, apiResults]);
 
-  const search = useCallback(async (q) => {
+  const search = useCallback(async (q, src = "usda") => {
     if (!q.trim()) { setApiResults([]); setLoading(false); return; }
-    const r = await searchFoods(q);
-    setApiResults(r);
+    let results = [];
+    try {
+      if (src === "usda") {
+        const res = await fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(q)}&api_key=${import.meta.env.VITE_USDA_KEY || "DEMO_KEY"}&pageSize=10`);
+        const d = res.ok ? await res.json() : {};
+        if (d.foods?.length) results = d.foods.slice(0, 8).map(parseUSDA);
+      } else if (src === "off") {
+        const res = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&json=1&page_size=10&fields=code,product_name,brands,nutriments`);
+        const d = res.ok ? await res.json() : {};
+        if (d.products?.length) results = d.products.filter(p => p.product_name?.trim()).slice(0, 8).map(parseOFF);
+      } else {
+        results = await searchFoodsAI(q);
+      }
+    } catch {}
+    setApiResults(results.filter(r => r.name?.trim() && r.calories >= 0));
     setLoading(false);
   }, []);
 
   const handleInput = (e) => {
     const q = e.target.value;
     setQuery(q);
-    // Spinner appears immediately — no waiting for debounce
     if (q.trim()) setLoading(true);
     else          { setLoading(false); setApiResults([]); }
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => search(q), 350);   // 350 ms debounce
+    timer.current = setTimeout(() => search(q, source), 350);
   };
 
   const handleBarcodeFound = (food) => {
@@ -672,14 +803,12 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
               <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
             )}
           </div>
-          {/* AI meal photo scan */}
-          <label htmlFor="ft-meal-scan"
-            className="shrink-0 w-10 h-10 flex items-center justify-center bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl shadow-sm transition-colors cursor-pointer select-none"
+          {/* AI meal photo scan — opens MealScanModal */}
+          <button onClick={() => setShowMealScan(true)}
+            className="shrink-0 w-10 h-10 flex items-center justify-center bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl shadow-sm transition-colors"
             title="Snap meal photo — AI identifies foods">
             <Utensils size={17} className="text-white"/>
-          </label>
-          <input id="ft-meal-scan" ref={mealScanRef} type="file" accept="image/*" capture="environment"
-            onChange={handleMealScanFile} className="hidden"/>
+          </button>
           <button onClick={() => setShowScanner(true)}
             className="shrink-0 w-10 h-10 flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-md transition-colors"
             title="Scan barcode">
@@ -687,17 +816,40 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
           </button>
         </div>
 
-        {scanning && (
-          <div className="px-4 py-2 bg-purple-50 border-b border-purple-100 text-xs text-purple-700 flex items-center gap-2">
-            <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin shrink-0"/>
-            Analyzing your meal photo with AI…
-          </div>
-        )}
-
         {scanStatus === "notfound" && (
           <div className="px-4 py-2 bg-yellow-50 border-b border-yellow-100 text-xs text-yellow-700">
             Barcode not in database — search by name or try another product.
           </div>
+        )}
+
+        {/* ── Source selector ───────────────────────────────── */}
+        <div className="flex items-center gap-5 px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
+          {SOURCES.map(opt => (
+            <button key={opt.id} onClick={() => { setSource(opt.id); setApiResults([]); }}
+              className="flex items-center gap-1.5">
+              {/* Radio dot */}
+              <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors"
+                style={{ borderColor: source === opt.id ? opt.color : "#D1D5DB" }}>
+                {source === opt.id && (
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: opt.color }}/>
+                )}
+              </div>
+              <span className="text-xs font-semibold transition-colors"
+                style={{ color: source === opt.id ? opt.color : "#9CA3AF" }}>
+                {opt.label}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Barcode Scanner */}
+        {showScanner && (
+          <BarcodeScanner onFound={handleBarcodeFound} onClose={() => setShowScanner(false)} />
+        )}
+
+        {/* AI Meal Scan Modal */}
+        {showMealScan && (
+          <MealScanModal onFound={handleMealScanFound} onClose={() => setShowMealScan(false)} />
         )}
 
         {/* ── Selected food detail ──────────────────────────── */}
@@ -748,8 +900,12 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
           {isEmpty && !hasLocal && (
             <div className="text-center py-16 text-gray-400">
               <Search size={32} className="mx-auto mb-2 opacity-20" />
-              <p className="text-sm">Search foods from USDA, Open Food Facts, or AI lookup</p>
-              <p className="text-xs mt-1 opacity-70">Tap the camera icon to scan a barcode</p>
+              <p className="text-sm">
+                {source === "usda" ? "Search USDA FoodData Central" :
+                 source === "off"  ? "Search Open Food Facts (3M+ products)" :
+                                    "Search with AI — works for any food or restaurant"}
+              </p>
+              <p className="text-xs mt-1 opacity-70">Tap the camera to scan a barcode</p>
             </div>
           )}
 
@@ -809,11 +965,14 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
             </div>
           )}
 
-          {/* Full-screen loader only when no local hits at all */}
           {!isEmpty && loading && localMatches.length === 0 && (
             <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
               <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm">Searching USDA + Open Food Facts…</span>
+              <span className="text-sm">
+                {source === "usda" ? "Searching USDA…" :
+                 source === "off"  ? "Searching Open Food Facts…" :
+                                    "Asking AI…"}
+              </span>
             </div>
           )}
 
@@ -825,10 +984,6 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
           )}
         </div>
       </div>
-
-      {showScanner && (
-        <BarcodeScanner onFound={handleBarcodeFound} onClose={() => setShowScanner(false)} />
-      )}
     </div>
   );
 };
@@ -1421,7 +1576,7 @@ const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWa
           <div className="text-right">
             <div className="text-sm font-bold text-gray-800">{fmtDate(date)}</div>
             <div className="text-xs text-gray-400">
-              {new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "long" })}
+              {(([y,m,d]) => new Date(+y,+m-1,+d).toLocaleDateString("en-US",{weekday:"long"}))(date.split('-'))}
             </div>
           </div>
         </div>
@@ -1542,11 +1697,139 @@ const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWa
 };
 
 // ─────────────────────────────────────────────
-// SCREEN: Diary
+// MODAL: Edit Food Entry (long-press to open)
 // ─────────────────────────────────────────────
 
-const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, onRemoveFood, recipes = [], onSaveRecipe, onAddRecipeToMeal }) => {
+const EditFoodModal = ({ entry, meal, onSave, onDelete, onClose }) => {
+  const base = entry._base; // original per-100g data if available
+
+  const [name,     setName]     = useState(entry.name);
+  const [servings, setServings] = useState(entry.servings || 1);
+  const [calories, setCalories] = useState(entry.calories);
+  const [protein,  setProtein]  = useState(entry.protein  || 0);
+  const [carbs,    setCarbs]    = useState(entry.carbs    || 0);
+  const [fat,      setFat]      = useState(entry.fat      || 0);
+  const [fiber,    setFiber]    = useState(entry.fiber    || 0);
+  const [sodium,   setSodium]   = useState(entry.sodium   || 0);
+
+  // When servings changes and base data exists, recalculate macros
+  useEffect(() => {
+    if (!base) return;
+    const f = servings * (base.servingSize / 100);
+    setCalories(Math.round(base.calories * f));
+    setProtein( Math.round(base.protein  * f * 10) / 10);
+    setCarbs(   Math.round(base.carbs    * f * 10) / 10);
+    setFat(     Math.round(base.fat      * f * 10) / 10);
+    setFiber(   Math.round(base.fiber    * f * 10) / 10);
+    setSodium(  Math.round(base.sodium   * f));
+  }, [servings, base]);
+
+  const handleSave = () => {
+    onSave({ ...entry, name, servings, calories, protein, carbs, fat, fiber, sodium });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
+      <div className="bg-white flex flex-col" style={{ height: "100dvh" }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100">
+            <X size={20} className="text-gray-500"/>
+          </button>
+          <div className="text-center">
+            <h2 className="font-bold text-gray-900 text-sm">Edit Food</h2>
+            <p className="text-xs text-gray-400">{meal}</p>
+          </div>
+          <button onClick={() => { onDelete(); onClose(); }}
+            className="p-1.5 rounded-full hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors">
+            <Trash2 size={18}/>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+
+          {/* Name */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">Food name</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-sm font-semibold outline-none focus:border-emerald-500"/>
+          </div>
+
+          {/* Servings stepper */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">
+              Servings {base ? `· ${base.servingSize}${base.servingUnit} each` : ""}
+            </label>
+            <div className="flex items-center border-2 border-gray-200 rounded-xl overflow-hidden focus-within:border-emerald-500">
+              <button onClick={() => setServings(s => Math.max(0.25, +(s - 0.25).toFixed(2)))}
+                className="px-4 py-3 font-bold text-gray-600 hover:bg-gray-100 active:bg-gray-200">−</button>
+              <span className="flex-1 text-center py-3 font-bold text-gray-900 border-x-2 border-gray-200">{servings}</span>
+              <button onClick={() => setServings(s => +(s + 0.25).toFixed(2))}
+                className="px-4 py-3 font-bold text-gray-600 hover:bg-gray-100 active:bg-gray-200">+</button>
+            </div>
+            {base && <p className="text-xs text-emerald-600 mt-1.5 font-medium">↻ Nutrition below updates automatically</p>}
+          </div>
+
+          {/* Nutrition grid */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">
+              Nutrition {base ? "(auto-calculated · tap to override)" : ""}
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                ["Calories (kcal)", calories, setCalories, "#111827"],
+                ["Protein (g)",     protein,  setProtein,  "#F97316"],
+                ["Carbs (g)",       carbs,    setCarbs,    "#3B82F6"],
+                ["Fat (g)",         fat,      setFat,      "#EAB308"],
+                ["Fiber (g)",       fiber,    setFiber,    "#10B981"],
+                ["Sodium (mg)",     sodium,   setSodium,   "#9CA3AF"],
+              ].map(([label, val, setter, color]) => (
+                <div key={label}>
+                  <label className="text-xs font-semibold block mb-1" style={{ color }}>{label}</label>
+                  <input
+                    type="number" step="any"
+                    value={val || ""}
+                    onChange={e => setter(+e.target.value || 0)}
+                    className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-bold outline-none focus:border-emerald-500"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {entry.logTime && (
+            <p className="text-xs text-gray-300 text-center">Logged at {entry.logTime}</p>
+          )}
+        </div>
+
+        {/* Save */}
+        <div className="p-4 border-t border-gray-100">
+          <button onClick={handleSave}
+            className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-base rounded-2xl transition-colors shadow-lg shadow-emerald-200">
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, onRemoveFood, onUpdateFood, recipes = [], onSaveRecipe, onAddRecipeToMeal }) => {
   const [showRecipe, setShowRecipe] = useState(false);
+  const [editEntry,  setEditEntry]  = useState(null);
+  const [editMeal,   setEditMeal]   = useState(null);
+  const pressTimer = useRef(null);
+
+  const startLongPress = (entry, meal) => {
+    pressTimer.current = setTimeout(() => {
+      if (navigator.vibrate) navigator.vibrate(50); // short haptic pulse on Android
+      setEditEntry(entry);
+      setEditMeal(meal);
+    }, 500);
+  };
+  const cancelLongPress = () => clearTimeout(pressTimer.current);
   const goalCals   = calcGoalCals(profile);
   const allEntries = Object.values(diary||{}).flat();
   const totalCals  = allEntries.reduce((s,e)=>s+e.calories,0);
@@ -1602,7 +1885,14 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
               {entries.length===0
                 ? <p className="px-4 py-4 text-sm text-gray-400 text-center">Tap + to log {meal.toLowerCase()}</p>
                 : entries.map(entry=>(
-                    <div key={entry.logId} className="flex items-center px-4 py-3 border-b border-gray-50 last:border-0">
+                    <div key={entry.logId}
+                      className="flex items-center px-4 py-3 border-b border-gray-50 last:border-0 active:bg-emerald-50 transition-colors select-none"
+                      onTouchStart={() => startLongPress(entry, meal)}
+                      onTouchEnd={cancelLongPress}
+                      onTouchCancel={cancelLongPress}
+                      onMouseDown={() => startLongPress(entry, meal)}
+                      onMouseUp={cancelLongPress}
+                      onMouseLeave={cancelLongPress}>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{entry.name}</p>
                         <p className="text-xs text-gray-400">{entry.logTime && <span className="text-gray-300 mr-1">{entry.logTime} ·</span>}{entry.servings}× {entry.servingSize}{entry.servingUnit} · C:{Math.round(entry.carbs)}g P:{Math.round(entry.protein)}g F:{Math.round(entry.fat)}g</p>
@@ -1664,6 +1954,16 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
       <RecipeModal
         onSave={(recipe) => { onSaveRecipe(recipe); setShowRecipe(false); }}
         onClose={() => setShowRecipe(false)}
+      />
+    )}
+
+    {editEntry && (
+      <EditFoodModal
+        entry={editEntry}
+        meal={editMeal}
+        onSave={(updated) => { onUpdateFood(editMeal, updated); setEditEntry(null); setEditMeal(null); }}
+        onDelete={() => { onRemoveFood(editMeal, editEntry.logId); setEditEntry(null); setEditMeal(null); }}
+        onClose={() => { setEditEntry(null); setEditMeal(null); }}
       />
     )}
     </>
@@ -2497,6 +2797,23 @@ export default function App() {
     });
   },[date]);
 
+  const handleUpdateFood = useCallback((meal, updatedEntry) => {
+    setDiary(prev => {
+      const next = {
+        ...prev,
+        [date]: {
+          ...(prev[date] || {}),
+          [meal]: (prev[date]?.[meal] || []).map(e =>
+            e.logId === updatedEntry.logId ? updatedEntry : e
+          ),
+        }
+      };
+      store.set("nt-diary", next);
+      return next;
+    });
+    showToast("Entry updated ✓");
+  }, [date]);
+
   const handleAddExercise = useCallback((ex)=>{
     setExercise(prev=>{
       const next={...prev,[date]:[...(prev[date]||[]),ex]};
@@ -2652,7 +2969,7 @@ export default function App() {
     <div className="min-h-screen bg-gray-50 flex flex-col max-w-lg mx-auto relative">
       <div className="flex-1 overflow-y-auto overflow-x-hidden w-full" style={{paddingBottom:72}}>
         {screen==="today"    && <TodayScreen    profile={profile} diary={todayDiary} exercise={todayExercise} water={todayWater} date={date} onAddFood={setFoodModal} onAddWater={handleAddWater} streak={streak} stepsToday={todaySteps} fasting={fasting} onFastingUpdate={handleFastingUpdate}/>}
-        {screen==="diary"    && <DiaryScreen    diary={todayDiary} exercise={todayExercise} profile={profile} date={date} onDateChange={setDate} onAddFood={setFoodModal} onRemoveFood={handleRemoveFood} recipes={recipes} onSaveRecipe={handleSaveRecipe} onAddRecipeToMeal={handleAddRecipeToMeal}/>}
+        {screen==="diary"    && <DiaryScreen    diary={todayDiary} exercise={todayExercise} profile={profile} date={date} onDateChange={setDate} onAddFood={setFoodModal} onRemoveFood={handleRemoveFood} onUpdateFood={handleUpdateFood} recipes={recipes} onSaveRecipe={handleSaveRecipe} onAddRecipeToMeal={handleAddRecipeToMeal}/>}
         {screen==="exercise" && <ExerciseScreen exercise={todayExercise} date={date} onDateChange={setDate} onAdd={handleAddExercise} onRemove={handleRemoveExercise} profile={profile} stepsToday={todaySteps} onStepsChange={handleStepsChange}/>}
         {screen==="progress" && <ProgressScreen profile={profile} weightLog={weightLog} onAddWeight={handleAddWeight} diary={diary} exercise={exercise}/>}
         {screen==="goals"    && <GoalsScreen    profile={profile} onSave={handleSaveGoals} onExportCSV={handleExportCSV}/>}
