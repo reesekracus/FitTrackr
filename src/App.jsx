@@ -99,6 +99,135 @@ const calcExerciseCals = (met, weightKg, minutes) =>
   Math.round((met * 3.5 * weightKg * minutes) / 200);
 
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// MICRONUTRIENT CONSTANTS
+// ─────────────────────────────────────────────
+
+const MICRO_IDS = {
+  vitaminD:   1110,
+  calcium:    1087,
+  iron:       1089,
+  magnesium:  1090,
+  potassium:  1092,
+  zinc:       1095,
+  vitaminB12: 1178,
+  vitaminC:   1162,
+};
+
+const MICRO_INFO = [
+  { key:'vitaminD',   label:'Vitamin D',   unit:'mcg', drv:20,    color:'#F59E0B' },
+  { key:'calcium',    label:'Calcium',     unit:'mg',  drv:1300,  color:'#6366F1' },
+  { key:'iron',       label:'Iron',        unit:'mg',  drv:18,    color:'#EF4444' },
+  { key:'magnesium',  label:'Magnesium',   unit:'mg',  drv:420,   color:'#10B981' },
+  { key:'potassium',  label:'Potassium',   unit:'mg',  drv:4700,  color:'#8B5CF6' },
+  { key:'zinc',       label:'Zinc',        unit:'mg',  drv:11,    color:'#3B82F6' },
+  { key:'vitaminB12', label:'Vitamin B12', unit:'mcg', drv:2.4,   color:'#EC4899' },
+  { key:'vitaminC',   label:'Vitamin C',   unit:'mg',  drv:90,    color:'#F97316' },
+];
+// ─────────────────────────────────────────────
+
+const haptic = {
+  light:     () => navigator.vibrate?.(50),
+  double:    () => navigator.vibrate?.([50, 60, 50]),
+  milestone: () => navigator.vibrate?.(200),
+};
+
+// ─────────────────────────────────────────────
+// GREETING HELPERS
+// ─────────────────────────────────────────────
+
+const getGreeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+};
+
+const getDayMessage = (diary, goalCals, consumed) => {
+  const entries = Object.values(diary || {}).flat();
+  const logged  = Object.entries(diary || {}).filter(([,v])=>v?.length>0).map(([k])=>k);
+  const h       = new Date().getHours();
+  if (consumed >= goalCals && goalCals > 0) return "Daily goal reached! 🎉";
+  if (entries.length === 0) return "Nothing logged yet — tap a meal to start";
+  if (h < 11 && !logged.includes("Breakfast")) return "Don't forget breakfast!";
+  if (h >= 12 && h < 15 && !logged.includes("Lunch")) return "Time for lunch?";
+  if (h >= 17 && !logged.includes("Dinner")) return "Dinner still to log";
+  const rem = goalCals - consumed;
+  return rem > 0 ? `${rem} kcal left for today` : "You're right on track";
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: Sparkline — 7-day calorie trend strip
+// ─────────────────────────────────────────────
+
+const Sparkline = ({ data = [], goal = 0, color = "#10B981", height = 48, compact = false }) => {
+  const w   = compact ? 120 : 220;
+  const h   = height;
+  const max = Math.max(...data, goal, 100);
+  const pts = data.map((v, i) => ({
+    x: data.length < 2 ? w/2 : (i / (data.length - 1)) * w,
+    y: h - (v / max) * (h - 6) - 3,
+    v,
+  }));
+  const path = pts.map((p,i) => `${i===0?'M':'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const goalY = h - (goal / max) * (h - 6) - 3;
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{overflow:'visible'}}>
+      {/* Goal line */}
+      {goal > 0 && (
+        <line x1={0} y1={goalY} x2={w} y2={goalY}
+          stroke="rgba(0,0,0,0.12)" strokeWidth={1} strokeDasharray="4 3"/>
+      )}
+      {/* Trend line */}
+      {pts.length > 1 && (
+        <path d={path} fill="none" stroke={color} strokeWidth={2.5}
+          strokeLinecap="round" strokeLinejoin="round" opacity={0.9}/>
+      )}
+      {/* Dots */}
+      {pts.map((p,i) => (
+        <circle key={i} cx={p.x} cy={p.y} r={p.v>0?3:2}
+          fill={p.v>0?color:'rgba(0,0,0,0.12)'}/>
+      ))}
+    </svg>
+  );
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: MilestoneModal — streak milestone celebration
+// ─────────────────────────────────────────────
+
+const MILESTONE_DATA = {
+  7:   { emoji:"🔥", title:"7-Day Streak!",   msg:"You've logged every day for a week. Consistency is everything." },
+  14:  { emoji:"💪", title:"14-Day Streak!",  msg:"Two weeks of daily logging. You're building a real habit." },
+  30:  { emoji:"🏆", title:"30-Day Streak!",  msg:"A full month of consistency. That's genuinely impressive." },
+  60:  { emoji:"⚡", title:"60-Day Streak!",  msg:"Two months in. You're not just tracking — you're transforming." },
+  100: { emoji:"👑", title:"100-Day Streak!", msg:"100 consecutive days. Elite level commitment." },
+};
+
+const MilestoneModal = ({ streak, onClose }) => {
+  const m = MILESTONE_DATA[streak] || MILESTONE_DATA[7];
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-6">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose}/>
+      <div className="relative bg-white rounded-3xl p-8 text-center max-w-xs w-full shadow-2xl"
+        style={{animation:'sheet-up .4s cubic-bezier(.22,1,.36,1) forwards'}}>
+        <div className="text-7xl mb-4 block"
+          style={{animation:'flame-dance 1.5s ease-in-out infinite',display:'inline-block'}}>
+          {m.emoji}
+        </div>
+        <h2 className="text-2xl font-black text-gray-900 mb-2">{m.title}</h2>
+        <p className="text-gray-500 text-sm leading-relaxed mb-6">{m.msg}</p>
+        <button onClick={onClose}
+          className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-2xl transition-colors shadow-lg shadow-emerald-200">
+          Keep it up! 🚀
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
 // DATE HELPERS
 // ─────────────────────────────────────────────
 
@@ -176,6 +305,13 @@ const store = {
 const parseUSDA = (item) => {
   const n = item.foodNutrients || [];
   const g = (kw) => { const f = n.find(x => x.nutrientName?.toLowerCase().includes(kw)); return f ? f.value || 0 : 0; };
+  const gId = (id) => { const f = n.find(x => x.nutrientId === id); return f ? (f.value || 0) : 0; };
+  // Extract micros — only include keys with non-zero values
+  const micros = {};
+  Object.entries(MICRO_IDS).forEach(([key, id]) => {
+    const v = gId(id);
+    if (v > 0) micros[key] = Math.round(v * 100) / 100;
+  });
   return {
     id: `usda-${item.fdcId}`,
     name: item.description || "",
@@ -189,12 +325,31 @@ const parseUSDA = (item) => {
     servingSize: item.servingSize || 100,
     servingUnit: item.servingSizeUnit || "g",
     source: "USDA",
+    ...(Object.keys(micros).length > 0 && { micros }),
   };
 };
 
 const parseOFF = (item) => {
   const nm = item.nutriments || {};
   const kcal = nm["energy-kcal_100g"] || (nm.energy_100g ? nm.energy_100g / 4.184 : 0);
+  // OFF uses lowercase_100g naming for micros
+  const OFF_MICRO_KEYS = {
+    vitaminD:   ['vitamin-d_100g','vitamin_d_100g'],
+    calcium:    ['calcium_100g'],
+    iron:       ['iron_100g'],
+    magnesium:  ['magnesium_100g'],
+    potassium:  ['potassium_100g'],
+    zinc:       ['zinc_100g'],
+    vitaminB12: ['vitamin-b12_100g','vitamin_b12_100g'],
+    vitaminC:   ['vitamin-c_100g','vitamin_c_100g'],
+  };
+  const micros = {};
+  Object.entries(OFF_MICRO_KEYS).forEach(([key, keys]) => {
+    for (const k of keys) {
+      const v = nm[k];
+      if (v != null && v > 0) { micros[key] = Math.round(v * 100) / 100; break; }
+    }
+  });
   return {
     id: `off-${item.code || Date.now()}`,
     name: item.product_name || item.product_name_en || "",
@@ -208,6 +363,7 @@ const parseOFF = (item) => {
     servingSize: 100,
     servingUnit: "g",
     source: "Open Food Facts",
+    ...(Object.keys(micros).length > 0 && { micros }),
   };
 };
 
@@ -258,13 +414,15 @@ const searchFoodsAI = async (query) => {
 
 Return ONLY a valid JSON array (no markdown fences, no explanation) with up to 6 matching food items.
 Each item must use this exact shape:
-{"name":"full product name","brand":"brand or empty string","calories":0,"protein":0,"carbs":0,"fat":0,"fiber":0,"sodium":0,"servingSize":100,"servingUnit":"g"}
+{"name":"full product name","brand":"brand or empty string","calories":0,"protein":0,"carbs":0,"fat":0,"fiber":0,"sodium":0,"servingSize":100,"servingUnit":"g","micros":{"vitaminD":0,"calcium":0,"iron":0,"magnesium":0,"potassium":0,"zinc":0,"vitaminB12":0,"vitaminC":0}}
 
 Rules:
-- calories / protein / carbs / fat / fiber are per 100 g values (numbers, not strings)
-- sodium is in milligrams per 100 g
+- calories / protein / carbs / fat / fiber are per 100g values (numbers, not strings)
+- sodium is in milligrams per 100g
+- micros are per 100g: vitaminD (mcg), calcium (mg), iron (mg), magnesium (mg), potassium (mg), zinc (mg), vitaminB12 (mcg), vitaminC (mg)
+- Only include a micro key if the value is genuinely non-zero — omit keys with zero values
 - servingSize is the typical serving weight in grams (e.g. 55, 85, 100, 28)
-- Include specific product variants when relevant (e.g. "Jimmy Dean Fully Cooked Sausage Links", "Jimmy Dean Breakfast Sandwich")
+- Include specific product variants when relevant
 - Be accurate — use real USDA / label data for well-known brands
 - If the query is generic (e.g. "chicken"), include a few preparations
 - If nothing matches at all, return []`
@@ -281,20 +439,29 @@ Rules:
 
     return parsed
       .filter(f => f.name?.trim())
-      .map((f, i) => ({
-        id:          `ai-${Date.now()}-${i}`,
-        name:        f.name        || "",
-        brand:       f.brand       || "",
-        calories:    Math.round(f.calories    || 0),
-        protein:     Math.round((f.protein    || 0) * 10) / 10,
-        carbs:       Math.round((f.carbs      || 0) * 10) / 10,
-        fat:         Math.round((f.fat        || 0) * 10) / 10,
-        fiber:       Math.round((f.fiber      || 0) * 10) / 10,
-        sodium:      Math.round(f.sodium      || 0),
-        servingSize: f.servingSize || 100,
-        servingUnit: f.servingUnit || "g",
-        source:      "AI Lookup",
-      }));
+      .map((f, i) => {
+        const micros = {};
+        if (f.micros && typeof f.micros === 'object') {
+          Object.entries(f.micros).forEach(([k, v]) => {
+            if (MICRO_IDS[k] !== undefined && v > 0) micros[k] = Math.round(v * 100) / 100;
+          });
+        }
+        return {
+          id:          `ai-${Date.now()}-${i}`,
+          name:        f.name        || "",
+          brand:       f.brand       || "",
+          calories:    Math.round(f.calories    || 0),
+          protein:     Math.round((f.protein    || 0) * 10) / 10,
+          carbs:       Math.round((f.carbs      || 0) * 10) / 10,
+          fat:         Math.round((f.fat        || 0) * 10) / 10,
+          fiber:       Math.round((f.fiber      || 0) * 10) / 10,
+          sodium:      Math.round(f.sodium      || 0),
+          servingSize: f.servingSize || 100,
+          servingUnit: f.servingUnit || "g",
+          source:      "AI Lookup",
+          ...(Object.keys(micros).length > 0 && { micros }),
+        };
+      });
   } catch { return []; }
 };
 
@@ -469,47 +636,390 @@ const BarcodeScanner = ({ onFound, onClose }) => {
 };
 
 // ─────────────────────────────────────────────
-// COMPONENT: Calorie Ring
+// HOOK: useFade — fade out → swap content → fade in
+// Used for date navigation and tab switches within screens
 // ─────────────────────────────────────────────
 
-const CalorieRing = ({ consumed, goal, burned = 0 }) => {
-  const net = Math.max(consumed - burned, 0);
-  const remaining = Math.max(goal - net, 0);
-  const pct = Math.min(net / Math.max(goal, 1), 1);
-  const over = consumed - burned > goal;
-  const r = 68, c = 2 * Math.PI * r;
+const useFade = (delay = 120) => {
+  const [opacity, setOpacity] = useState(1);
+  const timer = useRef(null);
+  const fade = useCallback((callback) => {
+    setOpacity(0);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      callback();
+      setOpacity(1);
+    }, delay);
+  }, [delay]);
+  return [opacity, fade];
+};
+// ─────────────────────────────────────────────
+
+const useAnimatedNumber = (target, duration = 450) => {
+  const [display, setDisplay] = useState(target);
+  const prev    = useRef(target);
+  const frame   = useRef(null);
+  useEffect(() => {
+    const from = prev.current;
+    if (from === target) return;
+    const start = performance.now();
+    const tick  = (now) => {
+      const p     = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(Math.round(from + (target - from) * eased));
+      if (p < 1) frame.current = requestAnimationFrame(tick);
+      else prev.current = target;
+    };
+    frame.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame.current);
+  }, [target, duration]);
+  return display;
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: Goal confetti burst
+// ─────────────────────────────────────────────
+
+const Confetti = () => {
+  const COLORS = ['#10B981','#F97316','#3B82F6','#EAB308','#A855F7','#EF4444','#EC4899'];
   return (
-    <div className="flex flex-col items-center">
+    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-3xl" aria-hidden="true">
+      {Array.from({length:20}).map((_,i) => {
+        const color = COLORS[i % COLORS.length];
+        const left  = `${4 + (i * 4.8) % 92}%`;
+        const delay = `${(i * 0.06).toFixed(2)}s`;
+        const size  = 5 + (i % 4) * 2;
+        const shape = i % 3 === 0 ? '50%' : i % 3 === 1 ? '2px' : '0';
+        return (
+          <div key={i} style={{
+            position:'absolute', top:'35%', left,
+            width:size, height:size,
+            backgroundColor:color,
+            borderRadius:shape,
+            animation:`confetti-burst .9s ease-out ${delay} forwards`,
+            transform:`rotate(${i*18}deg)`,
+          }}/>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: Calorie Ring — meal segments + animated counter
+// ─────────────────────────────────────────────
+
+const CalorieRing = ({ consumed, goal, burned = 0, meals = {} }) => {
+  const net       = Math.max(consumed - burned, 0);
+  const remaining = Math.max(goal - net, 0);
+  const over      = net > goal;
+  const goalReached = remaining === 0 && consumed > 0;
+  useEffect(() => { if (goalReached) haptic.double(); }, [goalReached]);
+  const r = 68, cx = 85, cy = 85, circ = 2 * Math.PI * r;
+
+  const displayNum = useAnimatedNumber(over ? net - goal : remaining);
+
+  // Meal arc segments — graduated emerald shades
+  const MEAL_COLORS = ['#059669','#10B981','#34D399','#6EE7B7'];
+  const MEAL_KEYS   = ['Breakfast','Lunch','Dinner','Snacks'];
+  let cumOffset = 0;
+  const segments = MEAL_KEYS.map((m, i) => {
+    const cals = (meals[m] || []).reduce((s,e)=>s+e.calories,0);
+    const pct  = Math.min(cals / Math.max(goal, 1), 1 - cumOffset);
+    const arc  = pct * circ;
+    const off  = circ - cumOffset * circ;
+    cumOffset += pct;
+    return { arc, off, color: over ? '#EF4444' : MEAL_COLORS[i] };
+  }).filter(s => s.arc > 0.5);
+
+  return (
+    <div className="flex flex-col items-center relative">
+      {goalReached && <Confetti/>}
       <svg width="170" height="170" viewBox="0 0 170 170">
-        <circle cx="85" cy="85" r={r} fill="none" stroke="#F3F4F6" strokeWidth="14" />
-        <circle cx="85" cy="85" r={r} fill="none"
-          stroke={over ? "#EF4444" : "#10B981"} strokeWidth="14"
-          strokeDasharray={c} strokeDashoffset={c - pct * c}
-          strokeLinecap="round" transform="rotate(-90 85 85)"
-          style={{ transition: "stroke-dashoffset .6s ease" }} />
-        <text x="85" y="76" textAnchor="middle" fill={over ? "#EF4444" : "#111827"}
-          fontSize="30" fontWeight="800" fontFamily="system-ui">
-          {over ? `+${net - goal}` : remaining}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#F3F4F6" strokeWidth="14"/>
+        {segments.map((s,i) => (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+            stroke={s.color} strokeWidth="14" strokeLinecap="butt"
+            strokeDasharray={`${s.arc} ${circ - s.arc}`}
+            strokeDashoffset={s.off}
+            transform="rotate(-90 85 85)"
+            style={{transition:'stroke-dasharray .55s ease, stroke-dashoffset .55s ease'}}/>
+        ))}
+        {goalReached && (
+          <circle cx={cx} cy={cy} r={r+8} fill="none" stroke="#10B981" strokeWidth="3" opacity=".4"
+            style={{animation:'goal-ring-pulse 1.2s ease-out 3'}}/>
+        )}
+        <text x={cx} y={cy-8} textAnchor="middle"
+          fill={over?'#EF4444':goalReached?'#10B981':'#111827'}
+          fontSize="30" fontWeight="900" fontFamily="system-ui"
+          style={displayNum !== (over?net-goal:remaining) ? {animation:'number-bump .3s ease'} : {}}>
+          {over ? `+${displayNum}` : displayNum}
         </text>
-        <text x="85" y="96" textAnchor="middle" fill="#9CA3AF"
-          fontSize="11" fontFamily="system-ui">
-          {over ? "over goal" : "cal remaining"}
+        <text x={cx} y={cy+10} textAnchor="middle" fill="#9CA3AF" fontSize="11" fontFamily="system-ui">
+          {over ? 'over goal' : goalReached ? '🎉 goal hit!' : 'cal remaining'}
         </text>
       </svg>
       <div className="flex gap-5 text-sm text-gray-400 -mt-1">
-        <div className="text-center"><div className="font-bold text-gray-800 text-base">{goal}</div><div className="text-xs">goal</div></div>
-        <div className="w-px bg-gray-200" />
-        <div className="text-center"><div className="font-bold text-gray-800 text-base">{consumed}</div><div className="text-xs">food</div></div>
-        {burned > 0 && <><div className="w-px bg-gray-200" /><div className="text-center"><div className="font-bold text-emerald-500 text-base">{burned}</div><div className="text-xs">exercise</div></div></>}
+        <div className="text-center"><div className="font-black text-gray-800 text-base">{goal}</div><div className="text-xs">goal</div></div>
+        <div className="w-px bg-gray-200"/>
+        <div className="text-center"><div className="font-black text-gray-800 text-base">{consumed}</div><div className="text-xs">food</div></div>
+        {burned>0&&<><div className="w-px bg-gray-200"/><div className="text-center"><div className="font-black text-emerald-500 text-base">{burned}</div><div className="text-xs">exercise</div></div></>}
       </div>
     </div>
   );
 };
 
 // ─────────────────────────────────────────────
-// COMPONENT: Macro Bar
+// COMPONENT: Macro Doughnut — replaces plain bars
 // ─────────────────────────────────────────────
 
+const MacroDoughnut = ({ macros, goals, netCarbs, fiberGoal, sodiumGoal }) => {
+  const r = 52, cx = 64, cy = 64, circ = 2 * Math.PI * r;
+
+  const carbCals  = macros.carbs   * 4;
+  const protCals  = macros.protein * 4;
+  const fatCals   = macros.fat     * 9;
+  const totalCals = carbCals + protCals + fatCals;
+  const goalCals  = goals.carbs * 4 + goals.protein * 4 + goals.fat * 9;
+
+  let offset = 0;
+  const segs = [
+    { key:'carbs',   cals:carbCals,  color:'#3B82F6', val:macros.carbs,   goal:goals.carbs,   label:'Carbs'   },
+    { key:'protein', cals:protCals,  color:'#F97316', val:macros.protein, goal:goals.protein, label:'Protein' },
+    { key:'fat',     cals:fatCals,   color:'#EAB308', val:macros.fat,     goal:goals.fat,     label:'Fat'     },
+  ].map(s => {
+    const pct = Math.min(s.cals / Math.max(goalCals, 1), 1 - offset);
+    const arc = pct * circ;
+    const off = circ - offset * circ;
+    offset += pct;
+    return { ...s, arc, off };
+  });
+
+  const animC = useAnimatedNumber(Math.round(macros.carbs));
+  const animP = useAnimatedNumber(Math.round(macros.protein));
+  const animF = useAnimatedNumber(Math.round(macros.fat));
+  const animV = [animC, animP, animF];
+
+  return (
+    <div>
+      <div className="flex items-center gap-4">
+        {/* Donut */}
+        <div className="shrink-0 relative">
+          <svg width="128" height="128" viewBox="0 0 128 128">
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke="#F3F4F6" strokeWidth="13"/>
+            {segs.map((s,i)=>s.arc>0.5&&(
+              <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+                stroke={s.val>s.goal?'#EF4444':s.color} strokeWidth="13" strokeLinecap="butt"
+                strokeDasharray={`${s.arc} ${circ-s.arc}`}
+                strokeDashoffset={s.off}
+                transform="rotate(-90 64 64)"
+                style={{transition:'stroke-dasharray .5s ease'}}/>
+            ))}
+            <text x={cx} y={cy-4} textAnchor="middle" fill="#111827" fontSize="16" fontWeight="900" fontFamily="system-ui">
+              {Math.round(totalCals)}
+            </text>
+            <text x={cx} y={cy+11} textAnchor="middle" fill="#9CA3AF" fontSize="8.5" fontFamily="system-ui">
+              kcal eaten
+            </text>
+          </svg>
+        </div>
+
+        {/* Bars + numbers */}
+        <div className="flex-1 flex flex-col gap-3 min-w-0">
+          {segs.map((s,i)=>{
+            const pct = Math.min((s.val/Math.max(s.goal,1))*100,100);
+            const over = s.val > s.goal;
+            return (
+              <div key={s.key}>
+                <div className="flex justify-between items-baseline mb-1">
+                  <span className="text-xs font-bold" style={{color:s.color}}>{s.label}</span>
+                  <span className="text-xs text-gray-400">
+                    <span className="font-bold text-gray-700">{animV[i]}</span>/{s.goal}g
+                  </span>
+                </div>
+                <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full"
+                    style={{width:`${pct}%`,backgroundColor:over?'#EF4444':s.color,transition:'width .5s ease'}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Micronutrients */}
+      <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-3 gap-2 text-center">
+        <div>
+          <div className="text-sm font-bold text-blue-600">{netCarbs}g</div>
+          <div className="text-xs text-gray-400 mt-0.5">Net carbs</div>
+        </div>
+        <div>
+          <div className={`text-sm font-bold ${macros.fiber>=fiberGoal?'text-emerald-600':'text-gray-700'}`}>
+            {Math.round(macros.fiber * 10)/10}<span className="text-gray-400 font-normal text-xs">/{fiberGoal}g</span>
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">Fiber</div>
+        </div>
+        <div>
+          <div className={`text-sm font-bold ${macros.sodium>sodiumGoal?'text-red-500':'text-gray-700'}`}>
+            {macros.sodium>999?`${(macros.sodium/1000).toFixed(1)}k`:macros.sodium}
+            <span className="text-gray-400 font-normal text-xs">mg</span>
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">Sodium</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: BottomSheet — slide-up modal wrapper
+// Uses React state + CSS transition (reliable in all envs)
+// ─────────────────────────────────────────────
+
+const BottomSheet = ({ onClose, children, maxHeight = "92dvh", noBackdropClose = false }) => {
+  const [visible, setVisible] = useState(false);
+
+  // Trigger slide-up after first paint so transition plays
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50">
+      {/* Dimmed backdrop */}
+      <div
+        className="absolute inset-0 bg-black/30"
+        style={{ opacity: visible ? 1 : 0, transition: 'opacity .25s ease' }}
+        onClick={noBackdropClose ? undefined : onClose}
+      />
+      {/* Sheet — slides up from bottom */}
+      <div
+        className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl flex flex-col overflow-hidden"
+        style={{
+          maxHeight,
+          transform: visible ? 'translateY(0)' : 'translateY(100%)',
+          transition: 'transform .32s cubic-bezier(.22,1,.36,1)',
+        }}
+      >
+        {/* Drag handle pill */}
+        <div className="w-10 h-1.5 bg-gray-200 rounded-full mx-auto mt-3 mb-1 shrink-0"/>
+        {children}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: FoodRow — swipe-left to reveal Delete
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// COMPONENT: SwipeDeleteRow — generic reusable swipe-to-delete wrapper
+// Used for food entries, exercise entries, weight history, recipes
+// ─────────────────────────────────────────────
+
+const SwipeDeleteRow = ({ onDelete, onLongPress, label = "Delete", noBorder = false, className = "", children }) => {
+  const [dx,       setDx]       = useState(0);
+  const [open,     setOpen]     = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const startX    = useRef(0);
+  const pressTimer = useRef(null);
+  const THRESHOLD = 65;
+  const OPEN_POS  = -112;
+
+  const tStart = (e) => {
+    startX.current = e.touches[0].clientX;
+    if (!open && onLongPress) {
+      pressTimer.current = setTimeout(() => {
+        if (navigator.vibrate) navigator.vibrate(50);
+        onLongPress();
+      }, 500);
+    }
+  };
+  const tMove = (e) => {
+    clearTimeout(pressTimer.current);
+    const d = e.touches[0].clientX - startX.current;
+    if (open) { if (d > 10) setDx(Math.min(0, OPEN_POS + d)); }
+    else       { if (d < 0)  setDx(Math.max(d, OPEN_POS)); }
+  };
+  const tEnd = () => {
+    clearTimeout(pressTimer.current);
+    if (open) {
+      dx > OPEN_POS / 2 ? (setOpen(false), setDx(0)) : setDx(OPEN_POS);
+    } else {
+      dx <= -THRESHOLD ? (setOpen(true), setDx(OPEN_POS)) : setDx(0);
+    }
+  };
+
+  const handleDelete = () => { setDeleting(true); setTimeout(onDelete, 280); };
+  const handleClose  = () => { setOpen(false); setDx(0); };
+
+  return (
+    <div className={`relative overflow-hidden${noBorder ? '' : ' border-b border-gray-50 last:border-0'}${className ? ' ' + className : ''}`}>
+      {/* Red delete zone — user must tap to confirm */}
+      <button onClick={handleDelete}
+        className="absolute right-0 top-0 bottom-0 w-28 bg-red-500 active:bg-red-700 flex items-center justify-center gap-1.5 transition-colors">
+        <Trash2 size={16} className="text-white"/>
+        <span className="text-white text-xs font-bold">{label}</span>
+      </button>
+      {/* Sliding row — bg-white ensures red zone is always hidden at rest */}
+      <div
+        className="bg-white"
+        style={{
+          transform:`translateX(${deleting?-300:dx}px)`,
+          transition:(dx===0||dx===OPEN_POS||deleting)?'transform .28s ease':'none',
+          opacity: deleting ? 0 : 1,
+        }}
+        onTouchStart={tStart}
+        onTouchMove={tMove}
+        onTouchEnd={tEnd}
+        onTouchCancel={()=>{clearTimeout(pressTimer.current);setDx(open?OPEN_POS:0);}}
+        onClick={open ? handleClose : undefined}>
+        {/* Pass open state to children via render-prop or just render */}
+        {typeof children === 'function' ? children(open) : children}
+      </div>
+    </div>
+  );
+};
+
+// FoodRow — uses SwipeDeleteRow
+const FoodRow = ({ entry, onRemove, onLongPress }) => (
+  <SwipeDeleteRow onDelete={onRemove} onLongPress={onLongPress}>
+    {(open) => (
+      <div className="flex items-center px-4 py-3 bg-white">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900 truncate">{entry.name}</p>
+          <p className="text-xs text-gray-400">
+            {entry.logTime && <span className="text-gray-300 mr-1">{entry.logTime} ·</span>}
+            {entry.servings}× {entry.servingSize}{entry.servingUnit} · C:{Math.round(entry.carbs)}g P:{Math.round(entry.protein)}g F:{Math.round(entry.fat)}g
+          </p>
+        </div>
+        <div className="flex items-center gap-2 ml-2 shrink-0">
+          <span className="font-black text-sm text-gray-800">{entry.calories}</span>
+          {open ? <X size={13} className="text-gray-300"/> : <ChevronRight size={13} className="text-gray-200"/>}
+        </div>
+      </div>
+    )}
+  </SwipeDeleteRow>
+);
+
+// ─────────────────────────────────────────────
+// COMPONENT: Skeleton loading row
+// Uses Tailwind animate-pulse (reliable cross-env)
+// ─────────────────────────────────────────────
+
+const SkeletonRow = () => (
+  <div className="flex items-center gap-3 px-4 py-3.5 border-b border-gray-50 animate-pulse">
+    <div className="flex-1 flex flex-col gap-2">
+      <div className="h-4 bg-gray-200 rounded-lg w-3/4"/>
+      <div className="h-3 bg-gray-200 rounded-lg w-1/2"/>
+    </div>
+    <div className="h-5 bg-gray-200 rounded-lg w-12 shrink-0"/>
+  </div>
+);
+
+// Keep MacroBar for Progress / Goals screens
 const MacroBar = ({ label, consumed, goal, color }) => {
   const pct = Math.min((consumed / Math.max(goal, 1)) * 100, 100);
   const over = consumed > goal;
@@ -764,6 +1274,14 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
 
   const confirm = () => {
     const f = servings * (selected.servingSize / 100);
+    // Scale micros by serving factor — only include keys with non-zero results
+    const micros = {};
+    if (selected.micros) {
+      Object.entries(selected.micros).forEach(([k, v]) => {
+        const scaled = Math.round(v * f * 100) / 100;
+        if (scaled > 0) micros[k] = scaled;
+      });
+    }
     onAdd({
       ...selected,
       servings,
@@ -775,6 +1293,7 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
       fat:      Math.round(selected.fat      * f * 10) / 10,
       fiber:    Math.round(selected.fiber    * f * 10) / 10,
       sodium:   Math.round(selected.sodium   * f),
+      ...(Object.keys(micros).length > 0 && { micros }),
       _base: { ...selected },
     });
     onClose();
@@ -786,11 +1305,10 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
   const noHits   = !loading && !isEmpty && displayResults.length === 0;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
-      <div className="bg-white flex flex-col" style={{ height: "100dvh" }}>
-
-        {/* ── Header ───────────────────────────────────────── */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+    <BottomSheet onClose={onClose} noBackdropClose maxHeight="98dvh">
+      <div className="flex flex-col" style={{ height: "92dvh" }}>
+        {/* Header */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 shrink-0">
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 shrink-0">
             <X size={20} className="text-gray-500" />
           </button>
@@ -803,58 +1321,39 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
               <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
             )}
           </div>
-          {/* AI meal photo scan — opens MealScanModal */}
           <button onClick={() => setShowMealScan(true)}
-            className="shrink-0 w-10 h-10 flex items-center justify-center bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl shadow-sm transition-colors"
-            title="Snap meal photo — AI identifies foods">
+            className="shrink-0 w-10 h-10 flex items-center justify-center bg-purple-500 hover:bg-purple-600 active:bg-purple-700 rounded-xl shadow-sm transition-colors">
             <Utensils size={17} className="text-white"/>
           </button>
           <button onClick={() => setShowScanner(true)}
-            className="shrink-0 w-10 h-10 flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-md transition-colors"
-            title="Scan barcode">
+            className="shrink-0 w-10 h-10 flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-md transition-colors">
             <Camera size={18} className="text-white" />
           </button>
         </div>
 
-        {scanStatus === "notfound" && (
-          <div className="px-4 py-2 bg-yellow-50 border-b border-yellow-100 text-xs text-yellow-700">
-            Barcode not in database — search by name or try another product.
-          </div>
-        )}
-
-        {/* ── Source selector ───────────────────────────────── */}
-        <div className="flex items-center gap-5 px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
+        {/* Source selector */}
+        <div className="flex items-center gap-5 px-4 py-2.5 border-b border-gray-100 bg-gray-50/50 shrink-0">
           {SOURCES.map(opt => (
             <button key={opt.id} onClick={() => { setSource(opt.id); setApiResults([]); }}
               className="flex items-center gap-1.5">
-              {/* Radio dot */}
               <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors"
                 style={{ borderColor: source === opt.id ? opt.color : "#D1D5DB" }}>
-                {source === opt.id && (
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: opt.color }}/>
-                )}
+                {source === opt.id && <div className="w-2 h-2 rounded-full" style={{ backgroundColor: opt.color }}/>}
               </div>
-              <span className="text-xs font-semibold transition-colors"
-                style={{ color: source === opt.id ? opt.color : "#9CA3AF" }}>
-                {opt.label}
-              </span>
+              <span className="text-xs font-semibold" style={{ color: source === opt.id ? opt.color : "#9CA3AF" }}>{opt.label}</span>
             </button>
           ))}
         </div>
 
-        {/* Barcode Scanner */}
-        {showScanner && (
-          <BarcodeScanner onFound={handleBarcodeFound} onClose={() => setShowScanner(false)} />
+        {scanStatus === "notfound" && (
+          <div className="px-4 py-2 bg-yellow-50 border-b border-yellow-100 text-xs text-yellow-700 shrink-0">
+            Barcode not in database — search by name or try another product.
+          </div>
         )}
 
-        {/* AI Meal Scan Modal */}
-        {showMealScan && (
-          <MealScanModal onFound={handleMealScanFound} onClose={() => setShowMealScan(false)} />
-        )}
-
-        {/* ── Selected food detail ──────────────────────────── */}
+        {/* Selected detail */}
         {selected && (
-          <div className="border-b border-gray-100 p-4 bg-emerald-50">
+          <div className="border-b border-gray-100 p-4 bg-emerald-50 shrink-0">
             <div className="flex items-start justify-between mb-3">
               <div>
                 <p className="font-semibold text-gray-900 text-sm">{selected.name}</p>
@@ -864,14 +1363,9 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
               <button onClick={() => setSelected(null)}><X size={16} className="text-gray-400 mt-0.5" /></button>
             </div>
             <div className="grid grid-cols-4 gap-2 mb-3">
-              {[
-                ["kcal",    Math.round(selected.calories * factor),                  "#111827"],
-                ["carbs",   `${Math.round(selected.carbs   *factor*10)/10}g`,        "#3B82F6"],
-                ["protein", `${Math.round(selected.protein *factor*10)/10}g`,        "#F97316"],
-                ["fat",     `${Math.round(selected.fat     *factor*10)/10}g`,        "#EAB308"],
-              ].map(([lbl, val, clr]) => (
-                <div key={lbl} className="bg-white rounded-xl p-2.5 text-center shadow-md">
-                  <div className="font-bold text-sm" style={{ color: clr }}>{val}</div>
+              {[["kcal",Math.round(selected.calories*factor),"#111827"],["carbs",`${Math.round(selected.carbs*factor*10)/10}g`,"#3B82F6"],["protein",`${Math.round(selected.protein*factor*10)/10}g`,"#F97316"],["fat",`${Math.round(selected.fat*factor*10)/10}g`,"#EAB308"]].map(([lbl,val,clr])=>(
+                <div key={lbl} className="bg-white rounded-xl p-2.5 text-center shadow-sm">
+                  <div className="font-bold text-sm" style={{color:clr}}>{val}</div>
                   <div className="text-xs text-gray-400">{lbl}</div>
                 </div>
               ))}
@@ -879,72 +1373,63 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
             <div className="flex items-center gap-3 mb-3">
               <span className="text-sm text-gray-600">Servings:</span>
               <div className="flex items-center border border-gray-300 rounded-xl overflow-hidden">
-                <button onClick={() => setServings(s => Math.max(0.25, +(s - 0.25).toFixed(2)))}
-                  className="px-3 py-2 font-bold text-gray-600 hover:bg-gray-100">−</button>
+                <button onClick={()=>setServings(s=>Math.max(0.25,+(s-0.25).toFixed(2)))} className="px-3 py-2 font-bold text-gray-600 hover:bg-gray-100">−</button>
                 <span className="px-4 text-sm font-bold border-x border-gray-300 min-w-[52px] text-center py-2">{servings}</span>
-                <button onClick={() => setServings(s => +(s + 0.25).toFixed(2))}
-                  className="px-3 py-2 font-bold text-gray-600 hover:bg-gray-100">+</button>
+                <button onClick={()=>setServings(s=>+(s+0.25).toFixed(2))} className="px-3 py-2 font-bold text-gray-600 hover:bg-gray-100">+</button>
               </div>
             </div>
-            <button onClick={confirm}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-colors">
-              Add to {meal}
-            </button>
+            <button onClick={confirm} className="w-full bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-colors">Add to {meal}</button>
+            {/* Micronutrient preview — only when data available */}
+            {selected.micros && Object.keys(selected.micros).length > 0 && (
+              <div className="mt-3 pt-3 border-t border-emerald-100">
+                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mb-2">Micronutrients per serving</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {MICRO_INFO.filter(m=>(selected.micros?.[m.key]||0)>0).map(m=>{
+                    const base = selected.micros[m.key];
+                    const f    = servings * (selected.servingSize / 100);
+                    const val  = Math.round(base * f * 100) / 100;
+                    const display = val < 1 ? val.toFixed(1) : Math.round(val);
+                    return (
+                      <span key={m.key} className="text-[10px] font-semibold px-2 py-1 rounded-full"
+                        style={{background:`${m.color}18`,color:m.color}}>
+                        {m.label} {display}{m.unit}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* ── Results list ──────────────────────────────────── */}
+        {/* Results */}
         <div className="flex-1 overflow-y-auto">
-
-          {/* Empty search: prompt or Recent Foods */}
           {isEmpty && !hasLocal && (
             <div className="text-center py-16 text-gray-400">
               <Search size={32} className="mx-auto mb-2 opacity-20" />
-              <p className="text-sm">
-                {source === "usda" ? "Search USDA FoodData Central" :
-                 source === "off"  ? "Search Open Food Facts (3M+ products)" :
-                                    "Search with AI — works for any food or restaurant"}
-              </p>
-              <p className="text-xs mt-1 opacity-70">Tap the camera to scan a barcode</p>
+              <p className="text-sm">{source==="usda"?"Search USDA FoodData Central":source==="off"?"Search Open Food Facts (3M+ products)":"Search with AI — any food or restaurant"}</p>
+              <p className="text-xs mt-1 opacity-70">Tap camera icon to scan a barcode</p>
             </div>
           )}
-
-          {/* Section label */}
-          {(hasLocal) && (
+          {hasLocal && (
             <div className="px-4 pt-3 pb-1 flex items-center justify-between">
-              <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
-                {isEmpty ? "Recent Foods" : "Matches"}
-              </p>
-              {!isEmpty && loading && (
-                <p className="text-xs text-gray-400">Searching more…</p>
-              )}
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">{isEmpty?"Recent Foods":"Matches"}</p>
+              {!isEmpty&&loading&&<p className="text-xs text-gray-400">Searching more…</p>}
             </div>
           )}
-
-          {/* Food rows */}
-          {displayResults.map((food, idx) => {
-            const isRecent = idx < localMatches.length;
+          {displayResults.map((food,idx)=>{
+            const isRecent=idx<localMatches.length;
             return (
-              <button key={`${food.id}-${idx}`}
-                onClick={() => { setSelected(food); setServings(1); }}
+              <button key={`${food.id}-${idx}`} onClick={()=>{setSelected(food);setServings(1);}}
                 className="w-full text-left px-4 py-3.5 border-b border-gray-50 hover:bg-emerald-50 active:bg-emerald-100 transition-colors">
                 <div className="flex justify-between items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      {isRecent && isEmpty && (
-                        <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded-full leading-none">
-                          Recent
-                        </span>
-                      )}
+                      {isRecent&&isEmpty&&<span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded-full leading-none">Recent</span>}
                       <p className="font-medium text-gray-900 text-sm truncate">{food.name}</p>
                     </div>
-                    {food.brand && <p className="text-xs text-gray-400 truncate">{food.brand}</p>}
-                    <p className="text-xs text-gray-400">
-                      {food.servingSize}{food.servingUnit} ·{" "}
-                      {food.source === "AI Lookup"
-                        ? <span className="text-purple-500 font-medium">✦ AI estimate</span>
-                        : food.source}
-                    </p>
+                    {food.brand&&<p className="text-xs text-gray-400 truncate">{food.brand}</p>}
+                    <p className="text-xs text-gray-400">{food.servingSize}{food.servingUnit} · {food.source==="AI Lookup"?<span className="text-purple-500 font-medium">✦ AI estimate</span>:food.source}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <span className="font-bold text-gray-800">{food.calories}</span>
@@ -955,36 +1440,25 @@ const FoodSearchModal = ({ meal, onAdd, onClose, recents = [] }) => {
               </button>
             );
           })}
-
-          {/* Divider while API is still fetching and we have local hits */}
-          {!isEmpty && loading && localMatches.length > 0 && (
+          {!isEmpty&&loading&&localMatches.length===0&&<>{Array.from({length:5}).map((_,i)=><SkeletonRow key={i}/>)}</>}
+          {!isEmpty&&loading&&localMatches.length>0&&(
             <div className="flex items-center gap-3 px-4 py-3">
-              <div className="flex-1 h-px bg-gray-100" />
-              <span className="text-xs text-gray-400 whitespace-nowrap">Searching databases…</span>
-              <div className="flex-1 h-px bg-gray-100" />
+              <div className="flex-1 h-px bg-gray-100"/>
+              <span className="text-xs text-gray-400 whitespace-nowrap">{source==="usda"?"Searching USDA…":source==="off"?"Searching Open Food Facts…":"Asking AI…"}</span>
+              <div className="flex-1 h-px bg-gray-100"/>
             </div>
           )}
-
-          {!isEmpty && loading && localMatches.length === 0 && (
-            <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
-              <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm">
-                {source === "usda" ? "Searching USDA…" :
-                 source === "off"  ? "Searching Open Food Facts…" :
-                                    "Asking AI…"}
-              </span>
-            </div>
-          )}
-
-          {noHits && (
+          {noHits&&(
             <div className="text-center py-12 text-gray-400">
               <p className="text-sm font-medium">No results for "{query}"</p>
-              <p className="text-xs mt-1">Try a different spelling or more general term</p>
+              <p className="text-xs mt-1">Try different terms or switch source above</p>
             </div>
           )}
         </div>
       </div>
-    </div>
+      {showScanner&&<BarcodeScanner onFound={handleBarcodeFound} onClose={()=>setShowScanner(false)}/>}
+      {showMealScan&&<MealScanModal onFound={handleMealScanFound} onClose={()=>setShowMealScan(false)}/>}
+    </BottomSheet>
   );
 };
 
@@ -1041,8 +1515,8 @@ const ExerciseModal = ({ weightKg, onAdd, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
-      <div className="bg-white flex flex-col" style={{ height: "100dvh" }}>
+    <BottomSheet onClose={onClose}>
+      <div className="flex flex-col">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100"><X size={20} className="text-gray-500" /></button>
           <h2 className="font-bold text-gray-900">Log Exercise</h2>
@@ -1122,7 +1596,7 @@ const ExerciseModal = ({ weightKg, onAdd, onClose }) => {
           </div>
         )}
       </div>
-    </div>
+    </BottomSheet>
   );
 };
 
@@ -1431,8 +1905,8 @@ const RecipeModal = ({ onSave, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
-      <div className="bg-white flex flex-col" style={{ height: "100dvh" }}>
+    <BottomSheet onClose={onClose}>
+      <div className="flex flex-col">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100">
             <X size={20} className="text-gray-500"/>
@@ -1516,11 +1990,11 @@ const RecipeModal = ({ onSave, onClose }) => {
       {showFood && (
         <FoodSearchModal meal="Recipe" onAdd={addIngredient} onClose={()=>setShowFood(false)}/>
       )}
-    </div>
+    </BottomSheet>
   );
 };
 
-const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWater, streak, stepsToday = 0, fasting, onFastingUpdate }) => {
+const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWater, streak, stepsToday = 0, fasting, onFastingUpdate, weeklyCalories = [], stepMode = "extra" }) => {
   const goalCals = calcGoalCals(profile);
   const pct       = profile.macroPct || DEFAULT_MACROS;
   const goalMacros= calcMacroGrams(goalCals, pct);
@@ -1535,7 +2009,11 @@ const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWa
     const spm = STEPS_PER_MIN[e.name];
     return s + (spm ? Math.round(spm * e.duration) : 0);
   }, 0);
-  const manualStepCals = Math.round(stepsToday * 0.04 * (weightKg / 68));
+  // stepMode: "extra" = stepsToday are on top of exercises; "total" = stepsToday is the full day count
+  const extraSteps = stepMode === "total"
+    ? Math.max(0, stepsToday - autoExSteps)   // total minus exercises, floored at 0
+    : stepsToday;
+  const manualStepCals = Math.round(extraSteps * 0.04 * (weightKg / 68));
   const burned = profile.addExerciseCals !== false ? (exerciseBurned + manualStepCals) : 0;
   const macros   = {
     carbs:   Math.round(entries.reduce((s,e)=>s+(e.carbs||0),0)),
@@ -1550,11 +2028,18 @@ const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWa
   const sodiumGoal = 2300;
 
   return (
-    <div className="flex flex-col gap-4 p-4 pt-5 pb-24">
-      {/* ── FitTrackr brand header ──────────────────── */}
-      <div className="flex items-center justify-between pt-2">
+    <div className="flex flex-col gap-4 p-4 pt-5 pb-24 relative"
+      style={{background:'linear-gradient(180deg,rgba(16,185,129,.09) 0%,rgba(249,250,251,1) 38%)'}}>
 
-        {/* Logo + wordmark */}
+      {/* Decorative emerald orb behind ring card */}
+      <div className="absolute top-0 left-0 right-0 h-56 pointer-events-none"
+        style={{
+          background:'radial-gradient(ellipse 80% 60% at 50% -10%, rgba(16,185,129,.22) 0%, transparent 70%)',
+          zIndex:0,
+        }}/>
+
+      {/* ── FitTrackr brand header ──────────────────── */}
+      <div className="flex items-center justify-between pt-2 relative z-10">
         <div className="flex items-center gap-2.5">
           <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-200">
             <Zap size={20} className="text-white" strokeWidth={2.5}/>
@@ -1564,63 +2049,76 @@ const TodayScreen = ({ profile, diary, exercise, water, date, onAddFood, onAddWa
             <p className="text-[10px] text-emerald-500 font-bold tracking-widest uppercase leading-none mt-0.5">Free</p>
           </div>
         </div>
-
-        {/* Streak + date */}
         <div className="flex items-center gap-2">
           {streak > 0 && (
             <div className="flex flex-col items-center bg-orange-50 border border-orange-100 rounded-xl px-3 py-1.5">
-              <span className="text-lg leading-none">🔥</span>
-              <span className="text-xs font-bold text-orange-600 mt-0.5">{streak}d</span>
+              <span style={streak>=7?{animation:'flame-dance 1.6s ease-in-out infinite',display:'inline-block',fontSize:'18px'}:{fontSize:'18px'}}>🔥</span>
+              <span className="text-xs font-black text-orange-600 mt-0.5 leading-none">{streak}d</span>
             </div>
           )}
           <div className="text-right">
             <div className="text-sm font-bold text-gray-800">{fmtDate(date)}</div>
-            <div className="text-xs text-gray-400">
-              {(([y,m,d]) => new Date(+y,+m-1,+d).toLocaleDateString("en-US",{weekday:"long"}))(date.split('-'))}
-            </div>
+            <div className="text-xs text-gray-400">{(([y,m,d])=>new Date(+y,+m-1,+d).toLocaleDateString("en-US",{weekday:"long"}))(date.split('-'))}</div>
           </div>
         </div>
       </div>
 
-      {/* Ring card — hero element */}
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-md p-5">
-        <CalorieRing consumed={consumed} goal={goalCals} burned={burned} />
+      {/* Greeting */}
+      <div className="relative z-10 px-1 -mb-1">
+        <p className="text-xl font-black text-gray-800">{getGreeting()} 👋</p>
+        <p className="text-sm text-gray-400 mt-0.5">{getDayMessage(diary, goalCals, consumed)}</p>
       </div>
 
-      {/* Macros */}
+      {/* Ring — glassmorphism card */}
+      <div className="relative z-10 rounded-3xl p-5 border shadow-lg"
+        style={{
+          background:'rgba(255,255,255,0.72)',
+          backdropFilter:'blur(16px)',
+          WebkitBackdropFilter:'blur(16px)',
+          borderColor:'rgba(255,255,255,0.7)',
+          boxShadow:'0 8px 32px rgba(16,185,129,.12), 0 2px 8px rgba(0,0,0,.06)',
+        }}>
+        <CalorieRing consumed={consumed} goal={goalCals} burned={burned} meals={diary}/>
+      </div>
+
+      {/* Macro Doughnut */}
       <div className="bg-white rounded-3xl border border-gray-100 shadow-md p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold text-gray-800">Macros</h3>
-          <span className="text-xs text-gray-400 font-medium">
+          <h3 className="font-black text-gray-800">Macros</h3>
+          <span className="text-xs text-gray-400 font-semibold">
             {consumed > 0 ? `${Math.round((consumed/goalCals)*100)}% of goal` : "Nothing logged yet"}
           </span>
         </div>
-        <div className="flex flex-col gap-3.5">
-          <MacroBar label="Carbs"   consumed={macros.carbs}   goal={goalMacros.carbs}   color="#3B82F6"/>
-          <MacroBar label="Protein" consumed={macros.protein} goal={goalMacros.protein} color="#F97316"/>
-          <MacroBar label="Fat"     consumed={macros.fat}     goal={goalMacros.fat}     color="#EAB308"/>
-        </div>
-        {/* Micronutrient row */}
-        <div className="mt-4 pt-3.5 border-t border-gray-100 grid grid-cols-3 gap-3">
-          <div className="text-center">
-            <div className="text-sm font-bold text-blue-600">{netCarbs}g</div>
-            <div className="text-xs text-gray-400 mt-0.5">Net carbs</div>
-          </div>
-          <div className="text-center">
-            <div className={`text-sm font-bold ${macros.fiber >= fiberGoal ? "text-emerald-600" : "text-gray-700"}`}>
-              {macros.fiber}<span className="text-gray-400 font-normal text-xs">/{fiberGoal}g</span>
-            </div>
-            <div className="text-xs text-gray-400 mt-0.5">Fiber</div>
-          </div>
-          <div className="text-center">
-            <div className={`text-sm font-bold ${macros.sodium > sodiumGoal ? "text-red-500" : "text-gray-700"}`}>
-              {macros.sodium > 999 ? `${(macros.sodium/1000).toFixed(1)}k` : macros.sodium}
-              <span className="text-gray-400 font-normal text-xs">mg</span>
-            </div>
-            <div className="text-xs text-gray-400 mt-0.5">Sodium</div>
-          </div>
-        </div>
+        <MacroDoughnut macros={macros} goals={goalMacros} netCarbs={netCarbs} fiberGoal={fiberGoal} sodiumGoal={sodiumGoal}/>
       </div>
+
+      {/* 7-Day Calorie Trend */}
+      {weeklyCalories.some(v=>v>0) && (
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-md px-5 py-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-black text-gray-800 text-sm">7-Day Trend</h3>
+            <span className="text-xs text-gray-400">
+              {goalCals} kcal goal
+            </span>
+          </div>
+          <div className="flex items-end justify-between gap-1">
+            <Sparkline data={weeklyCalories} goal={goalCals} color="#10B981" height={52}/>
+            <div className="text-right shrink-0 ml-3">
+              <div className="text-xs text-gray-400 leading-tight">avg</div>
+              <div className="font-black text-gray-800 text-sm">
+                {Math.round(weeklyCalories.filter(v=>v>0).reduce((s,v)=>s+v,0)/Math.max(weeklyCalories.filter(v=>v>0).length,1))}
+              </div>
+              <div className="text-xs text-gray-400">kcal</div>
+            </div>
+          </div>
+          {/* Day labels */}
+          <div className="flex justify-between mt-1 px-0.5">
+            {['M','T','W','T','F','S','S'].map((d,i)=>(
+              <span key={i} className="text-[9px] text-gray-300 font-medium">{d}</span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Quick Add */}
       <div className="bg-white rounded-3xl border border-gray-100 shadow-md p-5">
@@ -1730,8 +2228,8 @@ const EditFoodModal = ({ entry, meal, onSave, onDelete, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex flex-col">
-      <div className="bg-white flex flex-col" style={{ height: "100dvh" }}>
+    <BottomSheet onClose={onClose}>
+      <div className="flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
@@ -1812,15 +2310,68 @@ const EditFoodModal = ({ entry, meal, onSave, onDelete, onClose }) => {
           </button>
         </div>
       </div>
+    </BottomSheet>
+  );
+};
+
+// ─────────────────────────────────────────────
+// COMPONENT: MicroCard — daily micronutrient summary
+// ─────────────────────────────────────────────
+
+const MicroCard = ({ micros }) => {
+  const present = MICRO_INFO.filter(m => (micros?.[m.key] || 0) > 0);
+  if (present.length === 0) return null;
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-md overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <h3 className="font-bold text-gray-800 text-sm">Micronutrients</h3>
+        <span className="text-xs text-gray-400">% of daily value</span>
+      </div>
+      <div className="p-4 grid grid-cols-2 gap-x-5 gap-y-4">
+        {present.map(m => {
+          const val = micros[m.key];
+          const pct = Math.min(Math.round((val / m.drv) * 100), 100);
+          const display = val < 1 ? val.toFixed(1) : Math.round(val);
+          return (
+            <div key={m.key}>
+              <div className="flex justify-between items-baseline mb-1.5">
+                <span className="text-xs font-semibold text-gray-700">{m.label}</span>
+                <span className="text-xs text-gray-400 tabular-nums">{display}{m.unit}</span>
+              </div>
+              <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full"
+                  style={{width:`${pct}%`,backgroundColor:m.color,transition:'width .5s ease'}}/>
+              </div>
+              <div className="text-[10px] font-medium mt-0.5"
+                style={{color:pct>=100?m.color:'#9CA3AF'}}>
+                {pct}%{pct>=100?' ✓':''}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
 
-const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, onRemoveFood, onUpdateFood, recipes = [], onSaveRecipe, onAddRecipeToMeal }) => {
+const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, onRemoveFood, onUpdateFood, recipes = [], onSaveRecipe, onDeleteRecipe, onAddRecipeToMeal }) => {
   const [showRecipe, setShowRecipe] = useState(false);
   const [editEntry,  setEditEntry]  = useState(null);
   const [editMeal,   setEditMeal]   = useState(null);
   const pressTimer = useRef(null);
+  const [contentOpacity, fadeContent] = useFade();
+  const handleDateChange = (d) => fadeContent(() => onDateChange(d));
+
+  const dailyMicros = useMemo(() => {
+    const totals = {};
+    Object.values(diary || {}).flat().forEach(entry => {
+      if (!entry.micros) return;
+      Object.entries(entry.micros).forEach(([k, v]) => {
+        totals[k] = Math.round(((totals[k] || 0) + v) * 100) / 100;
+      });
+    });
+    return totals;
+  }, [diary]);
 
   const startLongPress = (entry, meal) => {
     pressTimer.current = setTimeout(() => {
@@ -1838,17 +2389,30 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
 
   return (
     <>
-    <div className="flex flex-col pb-24">
-      {/* Date Nav */}
-      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 bg-white/95 backdrop-blur-sm border-b border-gray-100">
-        <button onClick={()=>onDateChange(shiftDate(date,-1))} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
-        <span className="font-bold text-gray-900">{fmtDate(date)}</span>
-        <button onClick={()=>onDateChange(shiftDate(date,1))} disabled={date>=todayStr()} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full disabled:opacity-30 transition-colors"><ChevronRight size={20} className="text-gray-600"/></button>
+    <div className="flex flex-col relative" style={{height:'calc(100dvh - 72px)',overflow:'hidden',background:'linear-gradient(180deg,rgba(99,102,241,.15) 0%,rgba(249,250,251,1) 35%)'}}>
+      <div className="absolute top-0 left-0 right-0 h-52 pointer-events-none"
+        style={{background:'radial-gradient(ellipse 85% 65% at 50% -8%, rgba(99,102,241,.18) 0%, transparent 70%)',zIndex:0}}/>
+      {/* Pinned header — never scrolls */}
+      <div className="shrink-0 z-10 flex items-center justify-between px-4 py-4 border-b border-indigo-100/60"
+        style={{background:'rgba(255,255,255,0.88)',backdropFilter:'blur(14px)',WebkitBackdropFilter:'blur(14px)',boxShadow:'0 3px 10px rgba(0,0,0,0.09)'}}>
+        <button onClick={()=>handleDateChange(shiftDate(date,-1))} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
+        <div className="text-center">
+          <p className="font-black text-gray-900 text-base leading-tight">{fmtDate(date)}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{(([y,m,d])=>new Date(+y,+m-1,+d).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"}))(date.split('-'))}</p>
+        </div>
+        <button onClick={()=>handleDateChange(shiftDate(date,1))} disabled={date>=todayStr()} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full disabled:opacity-30 transition-colors"><ChevronRight size={20} className="text-gray-600"/></button>
       </div>
-
-      <div className="p-4 flex flex-col gap-4">
-        {/* Summary bar */}
-        <div className="bg-gray-900 text-white rounded-2xl p-4 grid grid-cols-4 gap-1 text-center">
+      {/* Scrollable content — slides under pinned header */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="p-4 flex flex-col gap-4 pb-24" style={{opacity:contentOpacity,transition:'opacity .12s ease'}}>
+        {/* Glassmorphism summary bar */}
+        <div className="rounded-2xl p-4 grid grid-cols-4 gap-1 text-center"
+          style={{
+            background:'rgba(17,24,39,0.86)',
+            backdropFilter:'blur(12px)',
+            WebkitBackdropFilter:'blur(12px)',
+            boxShadow:'0 8px 24px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.07)',
+          }}>
           {[["Goal",goalCals,"text-gray-300"],["Food",totalCals,"text-emerald-400"],["Ex.",exCals,"text-orange-400"],["Net",net,net<0?"text-red-400":"text-white"]].map(([lbl,val,cls])=>(
             <div key={lbl} className="flex flex-col gap-0.5">
               <div className={`text-base font-extrabold ${cls}`}>{val}</div>
@@ -1856,6 +2420,9 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
             </div>
           ))}
         </div>
+
+        {/* Micronutrients — only renders when logged foods have micro data */}
+        <MicroCard micros={dailyMicros}/>
 
         {/* Meals */}
         {MEALS.map((meal,mi)=>{
@@ -1885,23 +2452,10 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
               {entries.length===0
                 ? <p className="px-4 py-4 text-sm text-gray-400 text-center">Tap + to log {meal.toLowerCase()}</p>
                 : entries.map(entry=>(
-                    <div key={entry.logId}
-                      className="flex items-center px-4 py-3 border-b border-gray-50 last:border-0 active:bg-emerald-50 transition-colors select-none"
-                      onTouchStart={() => startLongPress(entry, meal)}
-                      onTouchEnd={cancelLongPress}
-                      onTouchCancel={cancelLongPress}
-                      onMouseDown={() => startLongPress(entry, meal)}
-                      onMouseUp={cancelLongPress}
-                      onMouseLeave={cancelLongPress}>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{entry.name}</p>
-                        <p className="text-xs text-gray-400">{entry.logTime && <span className="text-gray-300 mr-1">{entry.logTime} ·</span>}{entry.servings}× {entry.servingSize}{entry.servingUnit} · C:{Math.round(entry.carbs)}g P:{Math.round(entry.protein)}g F:{Math.round(entry.fat)}g</p>
-                      </div>
-                      <div className="flex items-center gap-3 ml-2 shrink-0">
-                        <span className="font-bold text-sm text-gray-800">{entry.calories}</span>
-                        <button onClick={()=>onRemoveFood(meal,entry.logId)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={15}/></button>
-                      </div>
-                    </div>
+                    <FoodRow key={entry.logId} entry={entry} meal={meal}
+                      onRemove={()=>onRemoveFood(meal,entry.logId)}
+                      onLongPress={()=>{setEditEntry(entry);setEditMeal(meal);}}
+                    />
                   ))
               }
             </div>
@@ -1930,24 +2484,30 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
               <span className="font-bold text-gray-800 flex items-center gap-2">
                 <ChefHat size={15} className="text-emerald-500"/> My Recipes
               </span>
+              <span className="text-xs text-gray-400">swipe left to delete</span>
             </div>
             {recipes.map(r => (
-              <div key={r.id} className="flex items-center px-4 py-3 border-b border-gray-50 last:border-0">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900">{r.name}</p>
-                  <p className="text-xs text-gray-400">{r.perServing.calories} kcal/serving</p>
-                </div>
-                {MEALS.map(meal => (
-                  <button key={meal} onClick={() => onAddRecipeToMeal(meal, r)}
-                    className="ml-1 text-xs px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors font-medium">
-                    +{meal.slice(0,2)}
-                  </button>
-                ))}
-              </div>
+              <SwipeDeleteRow key={r.id} onDelete={()=>onDeleteRecipe(r.id)}>
+                {()=>(
+                  <div className="flex items-center px-4 py-3 bg-white gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900">{r.name}</p>
+                      <p className="text-xs text-gray-400">{r.perServing.calories} kcal/serving</p>
+                    </div>
+                    {MEALS.map(meal => (
+                      <button key={meal} onClick={() => onAddRecipeToMeal(meal, r)}
+                        className="text-xs px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors font-medium shrink-0">
+                        +{meal.slice(0,2)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </SwipeDeleteRow>
             ))}
           </div>
         )}
       </div>
+      </div>  {/* end inner scroll */}
     </div>
 
     {showRecipe && (
@@ -1974,35 +2534,53 @@ const DiaryScreen = ({ diary, exercise, profile, date, onDateChange, onAddFood, 
 // SCREEN: Exercise
 // ─────────────────────────────────────────────
 
-const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile, stepsToday, onStepsChange }) => {
+const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile, stepsToday, onStepsChange, stepMode = "extra", onStepModeChange }) => {
   const [showModal, setShowModal] = useState(false);
   const weightKg      = toKg(profile.weight, profile.weightUnit);
+  const [contentOpacity, fadeContent] = useFade();
+  const handleDateChange = (d) => fadeContent(() => onDateChange(d));
   const exerciseCals  = (exercise||[]).reduce((s,e)=>s+e.calories,0);
   const exerciseSteps = (exercise||[]).reduce((s,e)=>{
-    if (e.steps > 0) return s + e.steps;                           // user entered explicit count
-    const spm = STEPS_PER_MIN[e.name];                             // auto-calc from cadence table
+    if (e.steps > 0) return s + e.steps;
+    const spm = STEPS_PER_MIN[e.name];
     return s + (spm ? Math.round(spm * e.duration) : 0);
   }, 0);
   const autoCalcCount = (exercise||[]).filter(e =>
-    e.steps === 0 && STEPS_PER_MIN[e.name]                         // how many were auto-calculated
+    e.steps === 0 && STEPS_PER_MIN[e.name]
   ).length;
-  const manualSteps   = stepsToday || 0;
-  const totalSteps    = exerciseSteps + manualSteps;
-  // Only add calories for EXTRA steps — exercise steps are already in the MET calc
-  const manualStepCals = Math.round(manualSteps * 0.04 * (weightKg / 68));
-  const totalBurned   = exerciseCals + manualStepCals;
-  const stepMiles     = (totalSteps / 2000).toFixed(1);
+  const manualSteps    = stepsToday || 0;
+  // stepMode: "extra" = input is steps on top of exercises; "total" = input is full day total
+  const extraSteps     = stepMode === "total" ? Math.max(0, manualSteps - exerciseSteps) : manualSteps;
+  const totalSteps     = stepMode === "total" ? Math.max(exerciseSteps, manualSteps) : exerciseSteps + manualSteps;
+  const manualStepCals = Math.round(extraSteps * 0.04 * (weightKg / 68));
+  const totalBurned    = exerciseCals + manualStepCals;
+  const stepMiles      = (totalSteps / 2000).toFixed(1);
 
   return (
-    <div className="flex flex-col pb-24">
-      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 bg-white/95 backdrop-blur-sm border-b border-gray-100">
-        <button onClick={()=>onDateChange(shiftDate(date,-1))} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
-        <span className="font-bold text-gray-900">{fmtDate(date)}</span>
-        <button onClick={()=>onDateChange(shiftDate(date,1))} disabled={date>=todayStr()} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full disabled:opacity-30 transition-colors"><ChevronRight size={20} className="text-gray-600"/></button>
+    <div className="flex flex-col relative" style={{height:'calc(100dvh - 72px)',overflow:'hidden',background:'linear-gradient(180deg,rgba(249,115,22,.11) 0%,rgba(249,250,251,1) 32%)'}}>
+      <div className="absolute top-0 left-0 right-0 h-52 pointer-events-none"
+        style={{background:'radial-gradient(ellipse 85% 65% at 50% -8%, rgba(249,115,22,.22) 0%, transparent 70%)',zIndex:0}}/>
+      {/* Pinned header — never scrolls */}
+      <div className="shrink-0 z-10 flex items-center justify-between px-4 py-4 border-b border-orange-100/60"
+        style={{background:'rgba(255,255,255,0.88)',backdropFilter:'blur(14px)',WebkitBackdropFilter:'blur(14px)',boxShadow:'0 3px 10px rgba(0,0,0,0.09)'}}>
+        <button onClick={()=>handleDateChange(shiftDate(date,-1))} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
+        <div className="text-center">
+          <p className="font-black text-gray-900 text-base leading-tight">{fmtDate(date)}</p>
+          <p className="text-xs text-gray-400 mt-0.5">{(([y,m,d])=>new Date(+y,+m-1,+d).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"}))(date.split('-'))}</p>
+        </div>
+        <button onClick={()=>handleDateChange(shiftDate(date,1))} disabled={date>=todayStr()} className="w-9 h-9 flex items-center justify-center hover:bg-gray-100 rounded-full disabled:opacity-30 transition-colors"><ChevronRight size={20} className="text-gray-600"/></button>
       </div>
-
-      <div className="p-4 flex flex-col gap-4">
-        <div className="bg-orange-500 text-white rounded-3xl p-5 text-center shadow-lg shadow-orange-200">
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="p-4 flex flex-col gap-4 pb-24" style={{opacity:contentOpacity,transition:'opacity .12s ease'}}>
+        {/* Glassmorphism orange banner */}
+        <div className="rounded-3xl p-5 text-center text-white"
+          style={{
+            background:'linear-gradient(135deg,rgba(249,115,22,.94),rgba(234,88,12,.98))',
+            backdropFilter:'blur(12px)',
+            WebkitBackdropFilter:'blur(12px)',
+            boxShadow:'0 0 40px rgba(249,115,22,.45), 0 8px 32px rgba(249,115,22,.3), inset 0 1px 0 rgba(255,255,255,.2)',
+          }}>
           <div className="text-5xl font-extrabold">{totalBurned}</div>
           <div className="text-orange-100 mt-1">calories burned</div>
           {manualStepCals > 0 && (
@@ -2012,42 +2590,43 @@ const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile
           )}
         </div>
 
-        {/* Daily Steps */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-4">
+        {/* Daily Steps — emerald glassmorphism */}
+        <div className="rounded-2xl p-4"
+          style={{
+            background:'linear-gradient(135deg,rgba(16,185,129,.88),rgba(5,150,105,.94))',
+            backdropFilter:'blur(12px)',
+            WebkitBackdropFilter:'blur(12px)',
+            boxShadow:'0 0 40px rgba(16,185,129,.4), 0 8px 24px rgba(16,185,129,.25), inset 0 1px 0 rgba(255,255,255,.2)',
+          }}>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Activity size={17} className="text-emerald-500"/>
-              <span className="font-bold text-gray-800">Daily Steps</span>
+              <Activity size={17} className="text-emerald-200"/>
+              <span className="font-bold text-white">Daily Steps</span>
             </div>
             {totalSteps > 0 && (
-              <span className="text-xs text-gray-400">{stepMiles} mi · {totalSteps.toLocaleString()} steps</span>
+              <span className="text-xs text-emerald-200">{stepMiles} mi · {totalSteps.toLocaleString()} steps</span>
             )}
           </div>
-
-          {/* Total steps — big, prominent */}
           <div className="text-center mb-3">
-            <span className="text-5xl font-extrabold text-gray-900">{totalSteps.toLocaleString()}</span>
-            <span className="text-sm text-gray-400 ml-2">steps</span>
+            <span className="text-5xl font-extrabold text-white">{totalSteps.toLocaleString()}</span>
+            <span className="text-sm text-emerald-200 ml-2">steps</span>
           </div>
-
-          {/* Progress bar toward 10k */}
           <div className="mb-2">
-            <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <div className="flex justify-between text-xs text-emerald-200 mb-1">
               <span>Goal: 10,000 steps</span>
               <span>{Math.min(Math.round((totalSteps/10000)*100),100)}%</span>
             </div>
-            <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-500 rounded-full transition-all"
+            <div className="h-2.5 rounded-full overflow-hidden" style={{background:'rgba(255,255,255,0.35)'}}>
+              <div className="h-full bg-white/80 rounded-full transition-all"
                 style={{width:`${Math.min((totalSteps/10000)*100,100)}%`}}/>
             </div>
           </div>
-
           {exerciseSteps > 0 && (
-            <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 rounded-lg px-3 py-2 mt-2">
+            <div className="flex items-center gap-2 text-xs text-emerald-100 bg-white/10 rounded-lg px-3 py-2 mt-2">
               <Dumbbell size={12}/>
               <span>
                 {exerciseSteps.toLocaleString()} steps from exercises
-                {autoCalcCount > 0 && <span className="text-emerald-400 ml-1">({autoCalcCount} auto-calculated)</span>}
+                {autoCalcCount > 0 && <span className="text-emerald-200 ml-1">({autoCalcCount} auto-calculated)</span>}
               </span>
             </div>
           )}
@@ -2060,23 +2639,28 @@ const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile
         </button>
 
         {(exercise||[]).map(ex=>(
-          <div key={ex.logId} className="bg-white rounded-2xl border border-gray-100 shadow-md p-4 flex items-center gap-4">
-            <div className="w-11 h-11 bg-orange-100 rounded-xl flex items-center justify-center shrink-0">
-              <Dumbbell size={19} className="text-orange-600"/>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-gray-900 text-sm truncate">{ex.name}</p>
-              <p className="text-xs text-gray-400">
-                {ex.duration} min
-                {ex.steps > 0 && <span className="ml-2 text-emerald-600 font-medium">· {ex.steps.toLocaleString()} steps</span>}
-              </p>
-            </div>
-            <div className="text-right shrink-0">
-              <div className="font-extrabold text-orange-500">{ex.calories}</div>
-              <div className="text-xs text-gray-400">kcal</div>
-            </div>
-            <button onClick={()=>onRemove(ex.logId)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
-          </div>
+          <SwipeDeleteRow key={ex.logId} onDelete={()=>onRemove(ex.logId)} noBorder
+            className="bg-white rounded-2xl border border-gray-100 shadow-md">
+            {(open) => (
+              <div className="flex items-center p-4 gap-4">
+                <div className="w-11 h-11 bg-orange-100 rounded-xl flex items-center justify-center shrink-0">
+                  <Dumbbell size={19} className="text-orange-600"/>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-900 text-sm truncate">{ex.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {ex.duration} min
+                    {ex.steps > 0 && <span className="ml-2 text-emerald-600 font-medium">· {ex.steps.toLocaleString()} steps</span>}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-extrabold text-orange-500">{ex.calories}</div>
+                  <div className="text-xs text-gray-400">kcal</div>
+                </div>
+                {open && <X size={13} className="text-gray-300 ml-1"/>}
+              </div>
+            )}
+          </SwipeDeleteRow>
         ))}
 
         {(!exercise||exercise.length===0)&&(
@@ -2086,31 +2670,72 @@ const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile
           </div>
         )}
 
-        {/* Extra steps — compact, clearly secondary */}
+        {/* Step mode selector + input */}
         <div className="bg-white border border-gray-100 rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-2.5">
-            <div>
-              <p className="text-sm font-bold text-gray-700">Extra steps</p>
-              <p className="text-xs text-gray-400">Steps not captured in a logged exercise</p>
-            </div>
+          {/* Radio selector */}
+          <p className="text-sm font-bold text-gray-700 mb-3">Step counting mode</p>
+          <div className="flex flex-col gap-2.5 mb-4">
+            {[
+              { id: "extra", label: "Extra steps", sub: "Steps not captured in a logged exercise" },
+              { id: "total", label: "Total steps today", sub: "Your full day count — exercises will be subtracted" },
+            ].map(opt => (
+              <button key={opt.id} onClick={() => onStepModeChange(opt.id)}
+                className="flex items-start gap-3 text-left">
+                <div className="w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-colors"
+                  style={{ borderColor: stepMode === opt.id ? '#10B981' : '#D1D5DB' }}>
+                  {stepMode === opt.id && <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"/>}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800 leading-tight">{opt.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{opt.sub}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Input */}
+          <div className="flex items-center gap-3">
             {manualStepCals > 0 && (
-              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0 ml-2">
+              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0">
                 +{manualStepCals} kcal
               </span>
             )}
-          </div>
-          <div className="flex items-center gap-3">
             <input
               type="number" inputMode="numeric"
               value={stepsToday || ""}
               onChange={e => onStepsChange(Math.max(0, parseInt(e.target.value)||0))}
-              placeholder="Tap to enter steps"
+              placeholder={stepMode === "total" ? "Total steps today" : "Extra steps"}
               className="min-w-0 flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-base font-bold outline-none focus:border-emerald-400 placeholder-gray-300 bg-gray-50"
             />
             <span className="shrink-0 text-sm text-gray-400 font-medium">steps</span>
           </div>
+
+          {/* Breakdown for total mode */}
+          {stepMode === "total" && manualSteps > 0 && (
+            <div className="mt-3 bg-gray-50 rounded-xl px-3 py-2.5 text-xs text-gray-600">
+              <div className="flex justify-between mb-1">
+                <span>Total entered</span>
+                <span className="font-bold">{manualSteps.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between mb-1">
+                <span>From exercises</span>
+                <span className="font-bold text-orange-500">− {exerciseSteps.toLocaleString()}</span>
+              </div>
+              <div className="h-px bg-gray-200 my-1"/>
+              <div className="flex justify-between font-bold">
+                <span>Extra steps credited</span>
+                <span className={extraSteps > 0 ? "text-emerald-600" : "text-gray-400"}>
+                  {extraSteps.toLocaleString()}
+                  {extraSteps === 0 && manualSteps < exerciseSteps && (
+                    <span className="text-xs font-normal text-gray-400 ml-1">(exercises exceed total)</span>
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+      </div>  {/* end inner scroll */}
 
       {showModal&&<ExerciseModal weightKg={weightKg} onAdd={ex=>{onAdd(ex);setShowModal(false);}} onClose={()=>setShowModal(false)}/>}
     </div>
@@ -2121,9 +2746,11 @@ const ExerciseScreen = ({ exercise, date, onDateChange, onAdd, onRemove, profile
 // SCREEN: Progress
 // ─────────────────────────────────────────────
 
-const ProgressScreen = ({ profile, weightLog, onAddWeight, diary = {}, exercise = {} }) => {
+const ProgressScreen = ({ profile, weightLog, onAddWeight, onDeleteWeight, diary = {}, exercise = {} }) => {
   const [newWeight, setNewWeight] = useState(profile.weight);
-  const [view, setView] = useState("weight"); // "weight" | "weekly"
+  const [view, setView] = useState("weight");
+  const [tabOpacity, fadeTab] = useFade();
+  const changeView = (v) => fadeTab(() => setView(v));
   const unit = profile.weightUnit;
 
   const sorted  = useMemo(()=>[...weightLog].sort((a,b)=>a.date.localeCompare(b.date)),[weightLog]);
@@ -2166,20 +2793,24 @@ const ProgressScreen = ({ profile, weightLog, onAddWeight, diary = {}, exercise 
   const topFoods = Object.entries(foodFreq).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
   return (
-    <div className="flex flex-col gap-4 p-4 pt-5 pb-24">
-      <h1 className="text-2xl font-extrabold text-gray-900">Progress</h1>
+    <div className="flex flex-col gap-4 p-4 pt-5 pb-24 relative"
+      style={{background:'linear-gradient(180deg,rgba(16,185,129,.09) 0%,rgba(249,250,251,1) 30%)'}}>
+      <div className="absolute top-0 left-0 right-0 h-44 pointer-events-none"
+        style={{background:'radial-gradient(ellipse 80% 60% at 50% -5%, rgba(16,185,129,.15) 0%, transparent 70%)',zIndex:0}}/>
+      <h1 className="text-2xl font-extrabold text-gray-900 relative z-10">Progress</h1>
 
       {/* Tab switcher */}
       <div className="flex bg-gray-100 rounded-2xl p-1 gap-1">
         {[["weight","Weight"],["weekly","Weekly Report"]].map(([id,lbl])=>(
-          <button key={id} onClick={()=>setView(id)}
+          <button key={id} onClick={()=>changeView(id)}
             className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${view===id?"bg-white text-gray-900 shadow-md":"text-gray-400"}`}>
             {lbl}
           </button>
         ))}
       </div>
 
-      {view === "weight" && (<>
+      <div style={{opacity:tabOpacity,transition:'opacity .12s ease'}}>
+        {view === "weight" && (<>
         <div className="grid grid-cols-3 gap-3">
           {[["Start",sorted.length>0?sorted[0].weight:profile.weight],["Current",sorted.length>0?sorted[sorted.length-1].weight:profile.weight],["Goal",profile.goalWeight]].map(([lbl,val])=>(
             <div key={lbl} className="bg-white border border-gray-100 rounded-2xl p-3 text-center shadow-md">
@@ -2227,18 +2858,36 @@ const ProgressScreen = ({ profile, weightLog, onAddWeight, diary = {}, exercise 
 
         {sorted.length>0&&(
           <div className="bg-white border border-gray-100 rounded-2xl shadow-md overflow-hidden">
-            <h3 className="font-bold text-gray-800 p-4 border-b border-gray-100">History</h3>
+            <h3 className="font-bold text-gray-800 p-4 border-b border-gray-100">History
+              <span className="text-xs font-normal text-gray-400 ml-2">swipe left to delete</span>
+            </h3>
             {[...sorted].reverse().slice(0,10).map(entry=>(
-              <div key={entry.date} className="flex justify-between px-4 py-3 border-b border-gray-50 last:border-0 text-sm">
-                <span className="text-gray-500">{fmtDate(entry.date)}</span>
-                <span className="font-bold text-gray-900">{entry.weight} {unit}</span>
-              </div>
+              <SwipeDeleteRow key={entry.date} onDelete={()=>onDeleteWeight(entry.date)}>
+                {()=>(
+                  <div className="flex justify-between px-4 py-3 bg-white text-sm">
+                    <span className="text-gray-500">{fmtDate(entry.date)}</span>
+                    <span className="font-bold text-gray-900">{entry.weight} {unit}</span>
+                  </div>
+                )}
+              </SwipeDeleteRow>
             ))}
           </div>
         )}
-      </>)}
+        </>)}
 
       {view === "weekly" && (<>
+        {/* 7-day sparkline strip */}
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-md px-4 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-bold text-gray-800">7-Day Trend</span>
+            <span className="text-xs text-gray-400">goal {goalCals} kcal</span>
+          </div>
+          <Sparkline data={last7.map(d=>d.calories)} goal={goalCals} color="#10B981" height={56}/>
+          <div className="flex justify-between mt-1 px-0.5">
+            {last7.map((d,i)=><span key={i} className="text-[9px] text-gray-300 font-medium">{d.date.slice(0,3)}</span>)}
+          </div>
+        </div>
+
         {/* 7-day calorie bar chart */}
         <div className="bg-white border border-gray-100 rounded-2xl shadow-md p-4">
           <div className="flex items-center justify-between mb-3">
@@ -2264,7 +2913,7 @@ const ProgressScreen = ({ profile, weightLog, onAddWeight, diary = {}, exercise 
         </div>
 
         {/* Weekly stats */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-4">
           {[
             ["Avg calories/day", avgCals ? `${avgCals} kcal` : "—", "#10B981"],
             ["Avg protein/day",  avgProtein ? `${avgProtein}g` : "—", "#F97316"],
@@ -2301,6 +2950,7 @@ const ProgressScreen = ({ profile, weightLog, onAddWeight, diary = {}, exercise 
           </div>
         )}
       </>)}
+      </div>
     </div>
   );
 };
@@ -2454,11 +3104,15 @@ const FAQ_ITEMS = [
   },
   {
     q: "What is the AI Meal Scan?",
-    a: "Tap the purple fork icon in food search and photograph your plate. Claude's vision AI identifies each food item and estimates per-100g nutrition for each. Results appear labeled 'Meal Scan' so you know they're AI estimates. Best results with good lighting and distinct food items."
+    a: "Tap the purple fork icon in food search to open the Scan Your Plate screen. Tap Open Camera, photograph your plate, and Claude's vision AI identifies every food item visible and estimates per-100g nutrition for each. Results appear in the food list labeled 'Meal Scan'. Works best with good lighting and clearly distinct food items. Tap Try Again if nothing is detected."
   },
   {
-    q: "How does food search work when results are empty?",
-    a: "Search checks USDA FoodData Central and Open Food Facts simultaneously. If both are unavailable (rate limits or network issues), it automatically falls back to Claude AI, which has broad knowledge of branded and restaurant foods and labels results as 'AI Lookup'."
+    q: "How does food search work?",
+    a: "When adding food to the diary, three radio buttons appear under the search bar — USDA, Open Food Facts, and AI Lookup. USDA is selected by default and covers generic whole foods and ingredients. Open Food Facts covers 3M+ packaged and branded products. Tap AI Lookup for restaurant items, regional foods, or anything the databases miss. Switching sources instantly re-runs your current search."
+  },
+  {
+    q: "How do I edit a food entry I already logged?",
+    a: "In the Diary screen, press and hold any food entry for about half a second. Your phone will vibrate briefly to confirm, then the Edit Food screen opens. You can change the food name, adjust servings (nutrition recalculates automatically if the original food data is available), or manually edit any nutrition value. Tap Save Changes to update, or use the trash icon in the top corner to delete the entry."
   },
   {
     q: "How do I build and log a recipe?",
@@ -2474,11 +3128,19 @@ const FAQ_ITEMS = [
   },
   {
     q: "How are daily steps counted?",
-    a: "Steps come from two sources: exercises logged with step counts (walking and running exercises auto-calculate steps from duration using published cadence data), and the Extra steps field for steps not from a logged workout. The Daily Steps card on Exercise screen shows the combined total."
+    a: "Steps come from two sources: exercises (walking and running auto-calculate steps from duration using cadence data) and your manual step entry. In the Exercise tab under 'Step counting mode', choose Extra steps (steps on top of exercises, the default) or Total steps today (your full day count — the app subtracts exercise steps automatically so nothing is double-counted). The Daily Steps card shows your combined total with a breakdown."
   },
   {
-    q: "What is the 🔥 streak on the Today screen?",
-    a: "The fire badge shows how many consecutive days you've logged at least one food entry. Maintaining a daily logging streak is one of the strongest predictors of reaching nutrition and weight goals — consistency beats perfection."
+    q: "What is the 🔥 streak and what are milestones?",
+    a: "The fire badge shows how many consecutive days you've logged at least one food entry. At milestone streaks — 7, 14, 30, 60, and 100 days — a celebration screen appears once to mark the achievement. Each milestone fires only once and is stored so it never repeats. Consistency beats perfection."
+  },
+  {
+    q: "How do I delete food, exercise, or recipe entries?",
+    a: "Swipe any entry left to reveal the red Delete button. The row slides open and waits — nothing is deleted until you tap Delete. Tap the row content or swipe back right to cancel without deleting. Works on food diary entries, exercise entries, weight history, and saved recipes."
+  },
+  {
+    q: "What micronutrients does FitTrackr track?",
+    a: "FitTrackr tracks 8 key micronutrients: Vitamin D, Calcium, Iron, Magnesium, Potassium, Zinc, Vitamin B12, and Vitamin C. A Micronutrients card appears in the Diary tab when logged foods have nutrient data — nutrients with no data are never shown as zero. When adding a food, available micros appear as colored badges in the detail panel before you log. Data comes from USDA and Open Food Facts; coverage is best for whole foods and packaged products."
   },
   {
     q: "How do I export my data?",
@@ -2486,7 +3148,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Is FitTrackr really free?",
-    a: "Yes, completely. There are no ads, no entry caps, no paywalls, and no premium tier. Features that MyFitnessPal charges $79.99–$99.99/year for — barcode scanner, custom macros, net carbs, AI meal scan, weekly reports, recipe builder, and the AI Meal Plan Builder — are all free here."
+    a: "Yes, completely. There are no ads, no entry caps, no paywalls, and no premium tier. Features that MyFitnessPal charges $79.99–$99.99/year for — barcode scanner, custom macros, net carbs, AI meal scan, weekly reports, recipe builder, micronutrient tracking, and the AI Meal Plan Builder — are all free here."
   },
 ];
 
@@ -2505,7 +3167,7 @@ const HelpFAQ = () => {
           </div>
           <div>
             <p className="font-bold text-gray-800 text-sm">Help &amp; FAQ</p>
-            <p className="text-xs text-gray-400">14 topics covered</p>
+            <p className="text-xs text-gray-400">17 topics covered</p>
           </div>
         </div>
         <ChevronRight size={18} className={`text-gray-400 transition-transform duration-200 ${sectionOpen ? "rotate-90" : ""}`}/>
@@ -2572,10 +3234,19 @@ const GoalsScreen = ({ profile, onSave, onExportCSV }) => {
   const macroTotal = pct.carbs + pct.protein + pct.fat;
 
   return (
-    <div className="flex flex-col gap-4 p-4 pt-5 pb-32">
-      <h1 className="text-2xl font-extrabold text-gray-900">Goals & Profile</h1>
+    <div className="flex flex-col gap-4 p-4 pt-5 pb-32 relative"
+      style={{background:'linear-gradient(180deg,rgba(16,185,129,.06) 0%,rgba(249,250,251,1) 28%)'}}>
+      <div className="absolute top-0 left-0 right-0 h-36 pointer-events-none"
+        style={{background:'radial-gradient(ellipse 70% 50% at 50% -5%, rgba(16,185,129,.13) 0%, transparent 70%)',zIndex:0}}/>
+      <h1 className="text-2xl font-extrabold text-gray-900 relative z-10">Goals &amp; Profile</h1>
 
-      <div className="bg-emerald-500 rounded-3xl p-5 text-white text-center shadow-lg shadow-emerald-200">
+      <div className="relative z-10 rounded-3xl p-5 text-white text-center"
+        style={{
+          background:'linear-gradient(135deg,rgba(16,185,129,.92),rgba(5,150,105,.96))',
+          backdropFilter:'blur(12px)',
+          WebkitBackdropFilter:'blur(12px)',
+          boxShadow:'0 8px 32px rgba(16,185,129,.28), inset 0 1px 0 rgba(255,255,255,.18)',
+        }}>
         <div className="text-5xl font-extrabold">{preview}</div>
         <div className="text-emerald-100 mt-1">calories per day</div>
         {macroTotal!==100&&<div className="text-yellow-200 text-xs mt-2">⚠ Macros total {macroTotal}% — must equal 100%</div>}
@@ -2726,7 +3397,9 @@ const GoalsScreen = ({ profile, onSave, onExportCSV }) => {
 export default function App() {
   const [loading,    setLoading]    = useState(true);
   const [profile,    setProfile]    = useState(null);
-  const [screen,     setScreen]     = useState("today");
+  const [screen,        setScreen]        = useState("today");
+  const [displayScreen, setDisplayScreen] = useState("today");
+  const [fadeOpacity,   setFadeOpacity]   = useState(1);
   const [date,       setDate]       = useState(todayStr());
   const [diary,      setDiary]      = useState({});
   const [exercise,   setExercise]   = useState({});
@@ -2738,16 +3411,19 @@ export default function App() {
   const [toast,      setToast]      = useState("");
   const [fasting,    setFasting]    = useState({ start: null, windowHours: 16 });
   const [recipes,    setRecipes]    = useState([]);
+  const [stepMode,   setStepMode]   = useState("extra"); // "extra" | "total"
+  const [milestone,  setMilestone]  = useState(null); // streak milestone to celebrate
 
   // ── Load from storage ──
   useEffect(()=>{
     (async()=>{
-      const [p,d,ex,w,st,wl,rc,fa,rv]=await Promise.all([
+      const [p,d,ex,w,st,wl,rc,fa,rv,ms,sm]=await Promise.all([
         store.get("nt-profile"), store.get("nt-diary"),
         store.get("nt-exercise"), store.get("nt-water"),
         store.get("nt-steps"), store.get("nt-weightlog"),
         store.get("nt-recents"), store.get("nt-fasting"),
-        store.get("nt-recipes"),
+        store.get("nt-recipes"), store.get("nt-milestones"),
+        store.get("nt-stepmode"),
       ]);
       if(p)  setProfile(p);
       if(d)  setDiary(d);
@@ -2758,6 +3434,7 @@ export default function App() {
       if(rc) setRecents(rc);
       if(fa) setFasting(fa);
       if(rv) setRecipes(rv);
+      if(sm) setStepMode(sm);
       setLoading(false);
     })();
   },[]);
@@ -2779,6 +3456,7 @@ export default function App() {
       store.set("nt-diary",next);
       return next;
     });
+    haptic.light();
     // Save original food to recents (dedupe by id, cap at 30)
     const base = entry._base || entry;
     setRecents(prev=>{
@@ -2820,6 +3498,7 @@ export default function App() {
       store.set("nt-exercise",next);
       return next;
     });
+    haptic.light();
   },[date]);
 
   const handleRemoveExercise = useCallback((logId)=>{
@@ -2846,6 +3525,11 @@ export default function App() {
     });
   },[date]);
 
+  const handleStepModeChange = useCallback((mode) => {
+    setStepMode(mode);
+    store.set("nt-stepmode", mode);
+  }, []);
+
   const handleAddWeight = useCallback((entry)=>{
     setWeightLog(prev=>{
       const next=[...prev.filter(e=>e.date!==entry.date),entry].sort((a,b)=>a.date.localeCompare(b.date));
@@ -2855,9 +3539,19 @@ export default function App() {
     showToast("Weight logged ✓");
   },[]);
 
+  const handleDeleteWeight = useCallback((date)=>{
+    setWeightLog(prev=>{
+      const next=prev.filter(e=>e.date!==date);
+      store.set("nt-weightlog",next);
+      return next;
+    });
+    showToast("Entry removed");
+  },[]);
+
   const handleSaveGoals = (p) => {
     setProfile(p);
     store.set("nt-profile",p);
+    haptic.light();
     showToast("Goals saved ✓");
   };
 
@@ -2876,6 +3570,15 @@ export default function App() {
       return next;
     });
     showToast("Recipe saved ✓");
+  }, []);
+
+  const handleDeleteRecipe = useCallback((id) => {
+    setRecipes(prev => {
+      const next = prev.filter(r => r.id !== id);
+      store.set("nt-recipes", next);
+      return next;
+    });
+    showToast("Recipe deleted");
   }, []);
 
   const handleAddRecipeToMeal = useCallback((meal, recipe) => {
@@ -2927,6 +3630,19 @@ export default function App() {
     showToast("CSV exported ✓");
   }, [diary, exercise, weightLog]);
 
+  // ── Fade transition when switching screens ───────────────────
+  const fadeTimer = useRef(null);
+  useEffect(() => {
+    if (screen === displayScreen) return;
+    setFadeOpacity(0);
+    clearTimeout(fadeTimer.current);
+    fadeTimer.current = setTimeout(() => {
+      setDisplayScreen(screen);
+      setFadeOpacity(1);
+    }, 140);
+    return () => clearTimeout(fadeTimer.current);
+  }, [screen]);
+
   // ── Streak — MUST be before early returns (Rules of Hooks) ──────
   // Counts consecutive days that have at least one food entry.
   const streak = useMemo(() => {
@@ -2941,6 +3657,33 @@ export default function App() {
     if (Object.values(diary[date] || {}).flat().length > 0) count++;
     return count;
   }, [diary, date]);
+
+  // ── Streak milestones — fire once per milestone ─────────────────
+  const MILESTONES = [7, 14, 30, 60, 100];
+  useEffect(() => {
+    if (!MILESTONES.includes(streak) || !profile) return;
+    store.get("nt-milestones").then(shown => {
+      const seen = new Set(shown || []);
+      if (!seen.has(streak)) {
+        setMilestone(streak);
+        haptic.milestone();
+      }
+    });
+  }, [streak]);
+
+  const handleMilestoneClose = useCallback(async () => {
+    const shown = await store.get("nt-milestones");
+    const next  = [...(shown || []), milestone];
+    store.set("nt-milestones", next);
+    setMilestone(null);
+  }, [milestone]);
+
+  // ── 7-day calorie data for sparklines ──────────────────────────
+  const weeklyCalories = useMemo(() =>
+    Array.from({length:7}, (_,i) => {
+      const d = shiftDate(todayStr(), -(6-i));
+      return Object.values(diary[d]||{}).flat().reduce((s,e)=>s+e.calories,0);
+    }), [diary]);
 
   // ── Loading ──
   if(loading) return (
@@ -2967,12 +3710,27 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col max-w-lg mx-auto relative">
-      <div className="flex-1 overflow-y-auto overflow-x-hidden w-full" style={{paddingBottom:72}}>
-        {screen==="today"    && <TodayScreen    profile={profile} diary={todayDiary} exercise={todayExercise} water={todayWater} date={date} onAddFood={setFoodModal} onAddWater={handleAddWater} streak={streak} stepsToday={todaySteps} fasting={fasting} onFastingUpdate={handleFastingUpdate}/>}
-        {screen==="diary"    && <DiaryScreen    diary={todayDiary} exercise={todayExercise} profile={profile} date={date} onDateChange={setDate} onAddFood={setFoodModal} onRemoveFood={handleRemoveFood} onUpdateFood={handleUpdateFood} recipes={recipes} onSaveRecipe={handleSaveRecipe} onAddRecipeToMeal={handleAddRecipeToMeal}/>}
-        {screen==="exercise" && <ExerciseScreen exercise={todayExercise} date={date} onDateChange={setDate} onAdd={handleAddExercise} onRemove={handleRemoveExercise} profile={profile} stepsToday={todaySteps} onStepsChange={handleStepsChange}/>}
-        {screen==="progress" && <ProgressScreen profile={profile} weightLog={weightLog} onAddWeight={handleAddWeight} diary={diary} exercise={exercise}/>}
-        {screen==="goals"    && <GoalsScreen    profile={profile} onSave={handleSaveGoals} onExportCSV={handleExportCSV}/>}
+      {/* ── Global CSS animations ─────────────────── */}
+      <style>{`
+        @keyframes shimmer{0%{background-position:-400% 0}100%{background-position:400% 0}}
+        .skeleton-pulse{background:linear-gradient(90deg,#f3f4f6 25%,#e9eaec 50%,#f3f4f6 75%);background-size:400% 100%;animation:shimmer 1.5s ease-in-out infinite;border-radius:8px}
+        @keyframes flame-dance{0%,100%{transform:scale(1) rotate(-3deg);filter:drop-shadow(0 0 3px rgba(251,146,60,.5))}33%{transform:scale(1.18) rotate(3deg);filter:drop-shadow(0 0 10px rgba(251,146,60,.9))}66%{transform:scale(1.06) rotate(-1deg);filter:drop-shadow(0 0 6px rgba(251,146,60,.7))}}
+        @keyframes confetti-burst{0%{transform:translateY(0) rotate(0deg) scale(1);opacity:1}100%{transform:translateY(90px) rotate(540deg) scale(.4);opacity:0}}
+        @keyframes goal-ring-pulse{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.5);opacity:0}}
+        @keyframes number-bump{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+      `}</style>
+      <div className="flex-1 w-full overflow-x-hidden"
+        style={{
+          overflowY: (displayScreen==='diary'||displayScreen==='exercise') ? 'hidden' : 'auto',
+          paddingBottom: (displayScreen==='diary'||displayScreen==='exercise') ? 0 : 72,
+          opacity: fadeOpacity,
+          transition: 'opacity .14s ease',
+        }}>
+        {displayScreen==="today"    && <TodayScreen    profile={profile} diary={todayDiary} exercise={todayExercise} water={todayWater} date={date} onAddFood={setFoodModal} onAddWater={handleAddWater} streak={streak} stepsToday={todaySteps} fasting={fasting} onFastingUpdate={handleFastingUpdate} weeklyCalories={weeklyCalories} stepMode={stepMode}/>}
+        {displayScreen==="diary"    && <DiaryScreen    diary={todayDiary} exercise={todayExercise} profile={profile} date={date} onDateChange={setDate} onAddFood={setFoodModal} onRemoveFood={handleRemoveFood} onUpdateFood={handleUpdateFood} recipes={recipes} onSaveRecipe={handleSaveRecipe} onDeleteRecipe={handleDeleteRecipe} onAddRecipeToMeal={handleAddRecipeToMeal}/>}
+        {displayScreen==="exercise" && <ExerciseScreen exercise={todayExercise} date={date} onDateChange={setDate} onAdd={handleAddExercise} onRemove={handleRemoveExercise} profile={profile} stepsToday={todaySteps} onStepsChange={handleStepsChange} stepMode={stepMode} onStepModeChange={handleStepModeChange}/>}
+        {displayScreen==="progress" && <ProgressScreen profile={profile} weightLog={weightLog} onAddWeight={handleAddWeight} onDeleteWeight={handleDeleteWeight} diary={diary} exercise={exercise}/>}
+        {displayScreen==="goals"    && <GoalsScreen    profile={profile} onSave={handleSaveGoals} onExportCSV={handleExportCSV}/>}
       </div>
 
       {/* Toast */}
@@ -2994,6 +3752,9 @@ export default function App() {
           </button>
         ))}
       </div>
+
+      {/* Milestone celebration */}
+      {milestone && <MilestoneModal streak={milestone} onClose={handleMilestoneClose}/>}
 
       {/* Food Modal */}
       {foodModal&&(
